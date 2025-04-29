@@ -15,16 +15,14 @@ const generateToken = (userId) => {
 
 // --- Registration Controller ---
 exports.register = async (req, res) => {
-  const { name, email, password, registrationNumber, branch } = req.body;
+  const { name, email, password, registrationNumber, branch, role } = req.body;
 
   // Basic validation
-  if (!name || !email || !password || !registrationNumber || !branch) {
-    return res
-      .status(400)
-      .json({
-        message:
-          "Please provide name, email, and password and registrationNumber and branch",
-      });
+  if (!name || !email || !password || !registrationNumber || !branch || !role) {
+    return res.status(400).json({
+      message:
+        "Please provide name, email, and password and registrationNumber and  and role",
+    });
   }
 
   try {
@@ -41,6 +39,7 @@ exports.register = async (req, res) => {
       password,
       registrationNumber,
       branch,
+      role,
     });
     await newUser.save();
 
@@ -57,6 +56,7 @@ exports.register = async (req, res) => {
         email: newUser.email,
         registrationNumber: newUser.registrationNumber,
         branch: newUser.branch,
+        role: newUser.role, // Include role if needed
       },
     });
   } catch (error) {
@@ -102,6 +102,7 @@ exports.login = async (req, res) => {
         email: user.email,
         registrationNumber: user.registrationNumber,
         branch: user.branch,
+        role: user.role, // Include role if needed
         // Add other non-sensitive fields if needed
       },
     });

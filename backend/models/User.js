@@ -21,15 +21,19 @@ const userSchema = new mongoose.Schema({
   // Add other fields as needed (e.g., name, studentId, role)
   name: {
     type: String,
-    required: [true, "Please provide your name"],
+    required: [true, "Please provide a name"],
   },
   registrationNumber: {
     type: String,
-    required: [true, "Please provide your registaration number"],
+    required: [true, "Please provide a registration number"],
   },
   branch: {
     type: String,
-    required: [true, "Please provide your branch"],
+  },
+  role: {
+    type: String,
+    enum: ["student", "proffesor"],
+    default: "student",
   },
   registeredAt: {
     type: Date,
