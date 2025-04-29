@@ -27,6 +27,19 @@ app.use("/api/auth", authRoutes);
 // Mount Protected Routes (ensure this comes AFTER any middleware it depends on)
 app.use("/api/protected", protectedRoutes);
 
+//newly added
+const subjectRoutes = require("./routes/subjectRoutes");
+const professorRoutes = require("./routes/professorRoutes");
+const locationRoutes = require("./routes/locationRoutes");
+const studentRoutes = require("./routes/studentRoutes");
+const timetableRoutes = require("./routes/timetableRoutes");
+
+app.use("/api/subjects", subjectRoutes);
+app.use("/api/professors", professorRoutes);
+app.use("/api/locations", locationRoutes);
+app.use("/api/students", studentRoutes);
+app.use("/api/timetables", timetableRoutes);
+
 // --- Basic Error Handling (Optional but Recommended) ---
 // Not Found Handler (if no route matches)
 app.use((req, res, next) => {
@@ -45,6 +58,8 @@ app.use((err, req, res, next) => {
 
 // --- Start Server ---
 const PORT = process.env.PORT || 5000; // Use PORT from .env or default to 5000
+
+//.........................................
 
 app.listen(PORT, () =>
   console.log(`Server running on http://localhost:${PORT}`)
