@@ -1,10 +1,21 @@
+// models/Subject.js
 const mongoose = require("mongoose");
+const Schema = mongoose.Schema;
 
-const subjectSchema = new mongoose.Schema({
-  code: { type: String, required: true, unique: true }, // e.g., "CS301"
-  name: { type: String, required: true }, // e.g., "Database Management Systems"
-  branch: { type: String, required: true }, // e.g., "CSE"
-  semester: { type: Number, required: true }, // e.g., 6
-});
+const subjectSchema = new Schema({
+    subjectCode: { // Keep consistent naming
+        type: String,
+        required: true,
+        unique: true,
+        trim: true,
+        uppercase: true
+    },
+    name: {
+        type: String,
+        required: true,
+        trim: true
+    },
+    // REMOVED branch and semester - Subjects are defined generally
+}, { timestamps: true });
 
-module.exports = mongoose.model("Subject", subjectSchema);
+module.exports = mongoose.model('Subject', subjectSchema);

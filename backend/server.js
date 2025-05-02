@@ -1,66 +1,87 @@
 // server.js
-const express = require("express");
-require("dotenv").config(); // Load environment variables early
-const connectDB = require("./config/db");
-const authRoutes = require("./routes/authRoutes");
-const protectedRoutes = require("./routes/protectedRoutes");
+const express = require('express');
+const dotenv = require('dotenv');
+const cors = require('cors');
+const http = require('http');
+// Remove socket.io for now unless implemented
+// const { Server } = require('socket.io');
+const connectDB = require('./config/db');
 
-// Connect to Database
+// --- Load Config & Connect DB ---
+dotenv.config();
 connectDB();
 
+// --- Route Imports ---
+const authRoutes = require('./routes/authRoutes');
+const locationRoutes = require('./routes/locationRoutes');
+const subjectRoutes = require('./routes/subjectRoutes');
+const timetableRoutes = require('./routes/timetableRoutes');
+const userRoutes = require('./routes/userRoutes');
+// Add other routes like attendanceRoutes later
+
 const app = express();
+const server = http.createServer(app);
+// const io = new Server(server, { cors: { origin: '*' } }); // If using Socket.IO
 
 // --- Middleware ---
-// Parse JSON request bodies
-app.use(express.json());
-// Parse URL-encoded request bodies (optional, for form submissions)
-// app.use(express.urlencoded({ extended: true }));
+app.use(cors()); // Enable CORS for all origins (adjust for production)
+app.use(express.json()); // Parse JSON request bodies
 
-// --- Routes ---
-app.get("/", (req, res) => {
-  res.send("API is running...");
-});
+// --- API Routes ---
+app.get('/', (req, res) => res.send('Attendance API Running...')); // Health check route
+app.use('/api/auth', authRoutes);
+app.use('/api/locations', locationRoutes);
+app.use('/api/subjects', subjectRoutes);
+app.use('/api/timetables', timetableRoutes);
+app.use('/api/users', userRoutes);
+// Mount other routes here...
 
-// Mount Authentication Routes
-app.use("/api/auth", authRoutes);
+// --- Socket.IO Setup (Example - requires implementation) ---
+/*
+io.on('connection', (socket) => {
+  console.log('Socket.IO user connected:', socket.id);
 
-// Mount Protected Routes (ensure this comes AFTER any middleware it depends on)
-app.use("/api/protected", protectedRoutes);
+  // Example: Join room based on class session ID
+  socket.on('joinSessionRoom', (sessionId) => {
+      console.log(socket.id, "joining room", sessionId);
+      socket.join(sessionId);
+  });
 
-//newly added
-const subjectRoutes = require("./routes/subjectRoutes");
-const professorRoutes = require("./routes/professorRoutes");
-const locationRoutes = require("./routes/locationRoutes");
-const studentRoutes = require("./routes/studentRoutes");
-const timetableRoutes = require("./routes/timetableRoutes");
+  // Example: Handling attendance updates (to be emitted from backend logic)
+  // Emitted like: io.to(sessionId).emit('attendanceUpdate', { studentId, status });
 
-app.use("/api/subjects", subjectRoutes);
-app.use("/api/professors", professorRoutes);
-app.use("/api/locations", locationRoutes);
-app.use("/api/students", studentRoutes);
-app.use("/api/timetables", timetableRoutes);
-
-// --- Basic Error Handling (Optional but Recommended) ---
-// Not Found Handler (if no route matches)
-app.use((req, res, next) => {
-  res.status(404).json({ message: `Not Found - ${req.originalUrl}` });
-});
-
-// General Error Handler (catches errors passed via next(error))
-app.use((err, req, res, next) => {
-  console.error("Unhandled Error:", err.stack);
-  res.status(err.status || 500).json({
-    message: err.message || "Internal Server Error",
-    // Provide stack trace only in development
-    stack: process.env.NODE_ENV === "development" ? err.stack : undefined,
+  socket.on('disconnect', () => {
+    console.log('Socket.IO user disconnected:', socket.id);
   });
 });
+*/
+
+// --- Error Handling Middleware (Place AFTER all routes) ---
+// Not Found Handler
+app.use((req, res, next) => {
+    res.status(404).json({ message: `Resource not found at ${req.originalUrl}` });
+});
+
+// General Error Handler
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+    console.error("Unhandled Error:", err.name, err.message);
+    console.error(err.stack); // Log stack trace for debugging
+    res.status(err.statusCode || 500).json({
+        message: err.message || 'Internal Server Error',
+        // Only show stack in development
+        stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+    });
+});
+
 
 // --- Start Server ---
-const PORT = process.env.PORT || 5000; // Use PORT from .env or default to 5000
+const PORT = process.env.PORT || 5000;
+server.listen(PORT, () => console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`));
 
-//.........................................
-
-app.listen(PORT, () =>
-  console.log(`Server running on http://localhost:${PORT}`)
-);
+// Handle unhandled promise rejections (optional but good practice)
+process.on('unhandledRejection', (err, promise) => {
+  console.error(`Unhandled Rejection: ${err.name}`, err.message);
+  // Close server & exit process gracefully (optional)
+  // server.close(() => process.exit(1));
+});

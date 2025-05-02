@@ -1,71 +1,70 @@
 // models/User.js
 const mongoose = require("mongoose");
-const bcrypt = require("bcrypt");
+const bcrypt = require("bcryptjs"); // Use bcryptjs
 
 const userSchema = new mongoose.Schema({
-  // Using email as the unique identifier for login
-  email: {
-    type: String,
-    required: [true, "Please provide an email"],
-    unique: true,
-    lowercase: true,
-    // Basic email format validation
-    match: [/\S+@\S+\.\S+/, "Please provide a valid email address"],
-  },
-  password: {
-    type: String,
-    required: [true, "Please provide a password"],
-    minlength: [6, "Password must be at least 6 characters long"],
-    select: false, // IMPORTANT: Don't automatically return password field in queries
-  },
-  // Add other fields as needed (e.g., name, studentId, role)
-  name: {
-    type: String,
-    required: [true, "Please provide a name"],
-  },
-  registrationNumber: {
-    type: String,
-    required: [true, "Please provide a registration number"],
-  },
-  branch: {
-    type: String,
-  },
-  role: {
-    type: String,
-    enum: ["student", "proffesor"],
-    default: "student",
-  },
-  registeredAt: {
-    type: Date,
-    default: Date.now,
-  },
-});
+    email: {
+        type: String,
+        required: [true, "Please provide an email"],
+        unique: true,
+        lowercase: true,
+        trim: true,
+        match: [/\S+@\S+\.\S+/, "Please provide a valid email address"],
+    },
+    password: {
+        type: String,
+        required: [true, "Please provide a password"],
+        minlength: [6, "Password must be at least 6 characters long"],
+        select: false,
+    },
+    firstName: {
+        type: String,
+        required: [true, "Please provide a first name"],
+        trim: true,
+    },
+    lastName: {
+        type: String,
+        required: [true, "Please provide a last name"],
+        trim: true,
+    },
+    role: {
+        type: String,
+        enum: ["student", "professor", "admin"], // Use standard roles
+        required: [true, "User role is required"],
+    },
+    isActive: { type: Boolean, default: true },
 
-// --- Mongoose Middleware ---
+    // --- Student Specific ---
+    studentId: { type: String, unique: true, sparse: true, trim: true },
+    branch: { type: String, trim: true },
+    currentSemester: { type: Number, min: 1, max: 8 },
+    section: { type: String, trim: true, uppercase: true },
 
-// Hash password BEFORE saving a new user document
+    // --- Professor Specific ---
+    facultyId: { type: String, unique: true, sparse: true, trim: true },
+    department: { type: String, trim: true },
+
+    // --- Admin might not need specific fields beyond role ---
+
+    registeredAt: { type: Date, default: Date.now },
+}, { timestamps: true });
+
+// Hash password BEFORE saving
 userSchema.pre("save", async function (next) {
-  // Only run this function if password was actually modified (or is new)
-  if (!this.isModified("password")) return next();
-
-  try {
-    // Generate salt & hash password
-    const salt = await bcrypt.genSalt(10); // 10 rounds is generally recommended
-    this.password = await bcrypt.hash(this.password, salt);
-    next();
-  } catch (error) {
-    next(error); // Pass error to the next middleware/error handler
-  }
+    if (!this.isModified("password")) return next();
+    try {
+        const salt = await bcrypt.genSalt(10);
+        this.password = await bcrypt.hash(this.password, salt);
+        next();
+    } catch (error) {
+        next(error);
+    }
 });
 
-// --- Mongoose Instance Method ---
-
-// Method to compare candidate password with the user's hashed password
+// Method to compare password
 userSchema.methods.comparePassword = async function (candidatePassword) {
-  // 'this.password' refers to the hashed password stored in the DB for this user
-  return await bcrypt.compare(candidatePassword, this.password);
+    return await bcrypt.compare(candidatePassword, this.password);
 };
 
 const User = mongoose.model("User", userSchema);
-
 module.exports = User;

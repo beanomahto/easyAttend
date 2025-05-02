@@ -1,113 +1,129 @@
 // controllers/authController.js
-const User = require("../models/User");
-const jwt = require("jsonwebtoken");
-const bcrypt = require("bcrypt");
-require("dotenv").config();
+const User = require("../models/User"); // Use unified User model
+const generateToken = require("../utils/generateToken");
+// bcrypt is handled in the User model's pre-save hook
 
-// --- Utility function to generate JWT ---
-const generateToken = (userId) => {
-  return jwt.sign(
-    { id: userId }, // Payload: typically user ID, maybe role
-    process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN }
-  );
-};
-
-// --- Registration Controller ---
+// Single Registration Endpoint
 exports.register = async (req, res) => {
-  const { name, email, password, registrationNumber, branch, role } = req.body;
+    const {
+        email, password, firstName, lastName, role, // Core
+        studentId, branch, currentSemester, section, // Student
+        facultyId, department // Professor
+        // No specific fields needed for admin beyond role currently
+    } = req.body;
 
-  // Basic validation
-  if (!name || !email || !password || !registrationNumber || !branch || !role) {
-    return res.status(400).json({
-      message:
-        "Please provide name, email, and password and registrationNumber and  and role",
-    });
-  }
-
-  try {
-    // Check if user already exists
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(400).json({ message: "Email already in use" });
+    // --- Basic Validation ---
+    if (!email || !password || !firstName || !lastName || !role) {
+        return res.status(400).json({ message: "Email, password, first/last name, and role are required." });
+    }
+    if (!['student', 'professor', 'admin'].includes(role)) {
+        return res.status(400).json({ message: "Invalid role specified." });
     }
 
-    // Create new user (password hashing handled by pre-save hook in model)
-    const newUser = new User({
-      name,
-      email,
-      password,
-      registrationNumber,
-      branch,
-      role,
-    });
-    await newUser.save();
-
-    // Generate JWT token
-    const token = generateToken(newUser._id);
-
-    // Respond with token and user info (excluding password)
-    res.status(201).json({
-      message: "User registered successfully",
-      token,
-      user: {
-        id: newUser._id,
-        name: newUser.name,
-        email: newUser.email,
-        registrationNumber: newUser.registrationNumber,
-        branch: newUser.branch,
-        role: newUser.role, // Include role if needed
-      },
-    });
-  } catch (error) {
-    console.error("Registration Error:", error);
-    // Handle potential validation errors from Mongoose
-    if (error.name === "ValidationError") {
-      const messages = Object.values(error.errors).map((val) => val.message);
-      return res.status(400).json({ message: messages.join(". ") });
+    // --- Role-Specific Validation ---
+    let missingFields = [];
+    if (role === 'student') {
+        if (!studentId) missingFields.push('studentId');
+        if (!branch) missingFields.push('branch');
+        if (!currentSemester) missingFields.push('currentSemester');
+        if (!section) missingFields.push('section'); // Section is now required
+    } else if (role === 'professor') {
+        if (!facultyId) missingFields.push('facultyId');
+        if (!department) missingFields.push('department');
     }
-    res.status(500).json({ message: "Server error during registration" });
-  }
+    if (missingFields.length > 0) {
+        return res.status(400).json({ message: `Missing required fields for role '${role}': ${missingFields.join(', ')}.` });
+    }
+
+    try {
+        // --- Check for Existing User ---
+        let existingUser = await User.findOne({ email });
+        if (existingUser) {
+            return res.status(400).json({ message: "Email already in use." });
+        }
+        if (role === 'student' && studentId) {
+            existingUser = await User.findOne({ studentId });
+            if (existingUser) return res.status(400).json({ message: "Student ID already exists." });
+        }
+        if (role === 'professor' && facultyId) {
+            existingUser = await User.findOne({ facultyId });
+            if (existingUser) return res.status(400).json({ message: "Faculty ID already exists." });
+        }
+
+        // --- Create User Object ---
+        const newUserObject = {
+            email, password, firstName, lastName, role,
+            ...(role === 'student' && { studentId, branch, currentSemester, section }),
+            ...(role === 'professor' && { facultyId, department }),
+        };
+
+        const newUser = new User(newUserObject);
+        await newUser.save(); // Password hashing happens here via pre-save hook
+
+        // --- Generate Token ---
+        const token = generateToken(newUser._id, newUser.role);
+
+        // --- Prepare Response ---
+        const userResponse = newUser.toObject(); // Convert to plain object
+        delete userResponse.password; // Remove password from response
+
+        res.status(201).json({
+            message: "User registered successfully",
+            token,
+            user: userResponse,
+        });
+
+    } catch (error) {
+        console.error("Registration Error:", error);
+        if (error.name === "ValidationError") {
+            const messages = Object.values(error.errors).map((val) => val.message);
+            return res.status(400).json({ message: messages.join(". ") });
+        }
+         // Handle duplicate key errors (e.g., if unique checks fail despite pre-check)
+        if (error.code === 11000) {
+             return res.status(400).json({ message: "Duplicate field value entered. Email, Student ID, or Faculty ID might already exist." });
+        }
+        res.status(500).json({ message: "Server error during registration." });
+    }
 };
 
-// --- Login Controller ---
+// Single Login Endpoint
 exports.login = async (req, res) => {
-  const { email, password } = req.body;
+    const { email, password } = req.body; // Don't need role from client
 
-  if (!email || !password) {
-    return res
-      .status(400)
-      .json({ message: "Please provide email and password" });
-  }
-
-  try {
-    // Find user by email - crucially, select the password field which is normally excluded
-    const user = await User.findOne({ email }).select("+password");
-
-    // Check if user exists and if password is correct
-    if (!user || !(await user.comparePassword(password))) {
-      return res.status(401).json({ message: "Invalid email or password" });
+    if (!email || !password) {
+        return res.status(400).json({ message: "Please provide email and password." });
     }
 
-    // Generate JWT token
-    const token = generateToken(user._id);
+    try {
+        // Find user by email, explicitly select password
+        const user = await User.findOne({ email }).select('+password');
 
-    // Respond with token and user info (excluding password)
-    res.status(200).json({
-      message: "Login successful",
-      token,
-      user: {
-        id: user._id,
-        name: user.name,
-        email: user.email,
-        registrationNumber: user.registrationNumber,
-        branch: user.branch,
-        role: user.role, // Include role if needed
-        // Add other non-sensitive fields if needed
-      },
-    });
-  } catch (error) {
-    console.error("Login Error:", error);
-    res.status(500).json({ message: "Server error during login" });
-  }
+        // Check user existence and password correctness
+        if (!user || !(await user.comparePassword(password))) {
+            return res.status(401).json({ message: "Invalid email or password." });
+        }
+
+        // Check if user is active
+         if (!user.isActive) {
+             return res.status(401).json({ message: "Account is inactive. Please contact administrator." });
+         }
+
+        // Generate Token
+        const token = generateToken(user._id, user.role);
+
+        // Prepare Response
+        const userResponse = user.toObject();
+        delete userResponse.password;
+
+        res.status(200).json({
+            message: "Login successful",
+            token,
+            user: userResponse,
+        });
+
+    } catch (error) {
+        console.error("Login Error:", error);
+        res.status(500).json({ message: "Server error during login." });
+    }
 };

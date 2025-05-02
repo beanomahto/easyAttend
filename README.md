@@ -1,1 +1,0 @@
-#﻿Geolocation-Based Attendance Tracking for College Students
