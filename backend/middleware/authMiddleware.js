@@ -5,6 +5,7 @@ require("dotenv").config();
 
 const protect = async (req, res, next) => {
     let token;
+    console.log(token);
 
     if (req.headers.authorization && req.headers.authorization.startsWith("Bearer")) {
         token = req.headers.authorization.split(" ")[1];
@@ -13,6 +14,8 @@ const protect = async (req, res, next) => {
     if (!token) {
         return res.status(401).json({ message: "Not authorized, no token provided" });
     }
+    console.log(token);
+    console.log(req.headers.authorization);
 
     try {
         const decoded = jwt.verify(token, process.env.JWT_SECRET);

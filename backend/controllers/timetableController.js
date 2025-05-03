@@ -156,16 +156,20 @@ exports.getStudentTodaySchedule = async (req, res) => {
     // const term = req.query.term || getCurrentTerm(); // Use helper function
     const term = req.query.term;
 
+    
     if (!branch || !semester || !section) {
       return res.status(400).json({
         message: "Student details incomplete (branch, semester, section).",
       });
     }
 
+    const serverNow = new Date();
     const dayOfWeek = new Date().toLocaleDateString("en-US", {
       weekday: "long",
     }); // e.g., "Saturday"
 
+    console.log(`[getStudentTodaySchedule] Server Time: ${serverNow.toISOString()}, Calculated Day: ${dayOfWeek}`);
+    
     console.log(
       `Fetching timetable for: Branch=${branch}, Semester=${semester}, Section=${section}, Term=${term}, Day=${dayOfWeek}`
     );
@@ -174,6 +178,7 @@ exports.getStudentTodaySchedule = async (req, res) => {
       branch,
       semester,
       section,
+      term,
       isActive: true, // Ensure we only get active timetables
     })
       .populate({
@@ -202,12 +207,14 @@ exports.getStudentTodaySchedule = async (req, res) => {
     // Use optional chaining ?. just in case weeklySchedule or the day itself is missing
     const todaysSchedule = timetable.weeklySchedule?.[dayOfWeek];
 
+    console.log(`[getStudentTodaySchedule] Responding with schedule for ${dayOfWeek}. Found: ${todaysSchedule ? todaysSchedule.length : 'None'}`);
     // Check if there's actually a schedule array for today or if it's empty
     if (!todaysSchedule || todaysSchedule.length === 0) {
       console.log(`No classes scheduled for ${dayOfWeek}.`);
       return res.status(200).json([]); // Return empty array if no classes today
     }
 
+    
     // If we reach here, we have classes for today
     console.log(`Found ${todaysSchedule.length} classes for ${dayOfWeek}.`);
     res.status(200).json(todaysSchedule);

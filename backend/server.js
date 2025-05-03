@@ -46,6 +46,7 @@ app.use((req, res, next) => {
 
 
 // --- API Routes ---
+// --- API Routes ---
 app.get('/', (req, res) => res.send('Attendance API Running...')); // Health check route
 app.use('/api/auth', authRoutes);
 app.use('/api/locations', locationRoutes);
