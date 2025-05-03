@@ -9,7 +9,7 @@ const router = express.Router();
 router.put("/", protect, restrictTo('admin'), timetableController.upsertTimetable);
 
 // GET /api/timetables/student/today - Logged-in student gets their schedule
-router.get("/student/today", protect, timetableController.getStudentTodaySchedule);
+router.get("/student/today", timetableController.getStudentTodaySchedule);
 
 // GET /api/timetables/professor/today - Logged-in professor gets their schedule
 router.get("/professor/today", protect, timetableController.getProfessorTodaySchedule);
