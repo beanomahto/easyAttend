@@ -8,7 +8,6 @@ const userSchema = new mongoose.Schema(
       type: String,
       required: [true, "Please provide an email"],
       unique: true,
-      lowercase: true,
       trim: true,
       match: [/\S+@\S+\.\S+/, "Please provide a valid email address"],
     },
@@ -39,7 +38,7 @@ const userSchema = new mongoose.Schema(
     studentId: { type: String, unique: true, sparse: true, trim: true },
     branch: { type: String, trim: true },
     currentSemester: { type: Number, min: 1, max: 8 },
-    section: { type: String, trim: true, uppercase: true },
+    section: { type: String, trim: true },
 
     // --- Professor Specific ---
     facultyId: { type: String, unique: true, sparse: true, trim: true },

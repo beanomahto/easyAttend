@@ -7,8 +7,7 @@ const subjectSchema = new Schema({
         type: String,
         required: true,
         unique: true,
-        trim: true,
-        uppercase: true
+        trim: true
     },
     name: {
         type: String,
