@@ -9,7 +9,7 @@ const router = express.Router();
 router.post("/", protect, restrictTo('admin'), subjectController.createSubject);
 
 // GET /api/subjects - Anyone logged in can view subjects (adjust if needed)
-router.get("/", protect, subjectController.getAllSubjects);
+router.get("/", subjectController.getAllSubjects);
 
 // TODO: Add routes for GET /:id, PUT /:id, DELETE /:id (likely admin protected)
 
