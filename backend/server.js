@@ -82,29 +82,32 @@ io.on('connection', (socket) => {
 // --- Error Handling Middleware (Place AFTER all routes) ---
 // Not Found Handler
 app.use((req, res, next) => {
-    res.status(404).json({ message: `Resource not found at ${req.originalUrl}` });
+  res.status(404).json({ message: `Resource not found at ${req.originalUrl}` });
 });
 
 // General Error Handler
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
-    console.error("Unhandled Error:", err.name, err.message);
-    console.error(err.stack); // Log stack trace for debugging
-    res.status(err.statusCode || 500).json({
-        message: err.message || 'Internal Server Error',
-        // Only show stack in development
-        stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
-    });
+  console.error("Unhandled Error:", err.name, err.message);
+  console.error(err.stack);
+  res.status(err.statusCode || 500).json({
+    message: err.message || "Internal Server Error",
+    stack: process.env.NODE_ENV === "development" ? err.stack : undefined,
+  });
 });
-
 
 // --- Start Server ---
 const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => console.log(`Server running in ${process.env.NODE_ENV || 'development'} mode on port ${PORT}`));
+server.listen(PORT, () =>
+  console.log(
+    `Server running in ${
+      process.env.NODE_ENV || "development"
+    } mode on port ${PORT}`
+  )
+);
 
-// Handle unhandled promise rejections (optional but good practice)
-process.on('unhandledRejection', (err, promise) => {
+// Handle unhandled promise rejections
+process.on("unhandledRejection", (err, promise) => {
   console.error(`Unhandled Rejection: ${err.name}`, err.message);
-  // Close server & exit process gracefully (optional)
   // server.close(() => process.exit(1));
 });
