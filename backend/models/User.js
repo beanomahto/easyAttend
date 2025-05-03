@@ -2,35 +2,36 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs"); // Use bcryptjs
 
-const userSchema = new mongoose.Schema({
+const userSchema = new mongoose.Schema(
+  {
     email: {
-        type: String,
-        required: [true, "Please provide an email"],
-        unique: true,
-        lowercase: true,
-        trim: true,
-        match: [/\S+@\S+\.\S+/, "Please provide a valid email address"],
+      type: String,
+      required: [true, "Please provide an email"],
+      unique: true,
+      lowercase: true,
+      trim: true,
+      match: [/\S+@\S+\.\S+/, "Please provide a valid email address"],
     },
     password: {
-        type: String,
-        required: [true, "Please provide a password"],
-        minlength: [6, "Password must be at least 6 characters long"],
-        select: false,
+      type: String,
+      required: [true, "Please provide a password"],
+      minlength: [6, "Password must be at least 6 characters long"],
+      select: false,
     },
     firstName: {
-        type: String,
-        required: [true, "Please provide a first name"],
-        trim: true,
+      type: String,
+      required: [true, "Please provide a first name"],
+      trim: true,
     },
     lastName: {
-        type: String,
-        required: [true, "Please provide a last name"],
-        trim: true,
+      type: String,
+      required: [true, "Please provide a last name"],
+      trim: true,
     },
     role: {
-        type: String,
-        enum: ["student", "professor", "admin"], // Use standard roles
-        required: [true, "User role is required"],
+      type: String,
+      enum: ["student", "professor", "admin"], // Use standard roles
+      required: [true, "User role is required"],
     },
     isActive: { type: Boolean, default: true },
 
@@ -47,23 +48,25 @@ const userSchema = new mongoose.Schema({
     // --- Admin might not need specific fields beyond role ---
 
     registeredAt: { type: Date, default: Date.now },
-}, { timestamps: true });
+  },
+  { timestamps: true }
+);
 
 // Hash password BEFORE saving
 userSchema.pre("save", async function (next) {
-    if (!this.isModified("password")) return next();
-    try {
-        const salt = await bcrypt.genSalt(10);
-        this.password = await bcrypt.hash(this.password, salt);
-        next();
-    } catch (error) {
-        next(error);
-    }
+  if (!this.isModified("password")) return next();
+  try {
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
+    next();
+  } catch (error) {
+    next(error);
+  }
 });
 
 // Method to compare password
 userSchema.methods.comparePassword = async function (candidatePassword) {
-    return await bcrypt.compare(candidatePassword, this.password);
+  return await bcrypt.compare(candidatePassword, this.password);
 };
 
 const User = mongoose.model("User", userSchema);
