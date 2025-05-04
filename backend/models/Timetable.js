@@ -26,7 +26,7 @@ const weeklyScheduleSchema = new Schema({
 const timetableSchema = new Schema({
     branch: { type: String, required: true, trim: true },
     semester: { type: Number, required: true, min: 1, max: 8 },
-    section: { type: String, required: true, trim: true, uppercase: true, default: 'A' },
+    section: { type: String, required: true, trim: true, default: 'A' },
     term: { type: String, required: true, trim: true }, // CRUCIAL: e.g., "FALL 2024"
     weeklySchedule: { type: weeklyScheduleSchema, required: true },
     isActive: { type: Boolean, default: true },
