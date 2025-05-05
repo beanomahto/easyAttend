@@ -39,10 +39,21 @@ exports.upsertTimetable = async (req, res) => {
 
     // --- Deep Validation of weeklySchedule (Example for one slot) ---
     // It's good practice to validate ObjectIds and existence of referenced docs
+    // --- Deep Validation of weeklySchedule (Example for one slot) ---
     let validationError = null;
     for (const day of Object.keys(weeklySchedule)) {
-      if (!Array.isArray(weeklySchedule[day])) continue; // Skip if day not an array
+       if (!Timetable.schema.path(`weeklySchedule.${day}`)) {
+           console.warn(`Received schedule data for invalid day: ${day}`);
+           continue;
+       }
+      if (!Array.isArray(weeklySchedule[day])) continue;
       for (const slot of weeklySchedule[day]) {
+         if (!slot || typeof slot !== 'object') {
+             validationError = `Invalid slot format found in schedule for ${day}.`; break;
+         }
+         if (!slot.startTime || !slot.endTime || !slot.subject || !slot.professor || !slot.location) {
+             validationError = `Slot missing required fields (startTime, endTime, subject, professor, location) for ${day}.`; break;
+         }
         if (
           !mongoose.Types.ObjectId.isValid(slot.subject) ||
           !mongoose.Types.ObjectId.isValid(slot.professor) ||
@@ -51,11 +62,6 @@ exports.upsertTimetable = async (req, res) => {
           validationError = `Invalid ObjectId found in schedule for ${day} at ${slot.startTime}.`;
           break;
         }
-        // Optional: Check if referenced professor actually has 'professor' role
-        // const prof = await User.findOne({ _id: slot.professor, role: 'professor' });
-        // if (!prof) validationError = `User ${slot.professor} is not a valid professor.`
-        // break;
-        // Similar checks for Subject and Location existence can be added
       }
       if (validationError) break;
     }
@@ -64,13 +70,13 @@ exports.upsertTimetable = async (req, res) => {
     }
     // --- End Validation ---
 
-    const filter = { branch, semester, section, term };
-    const update = { weeklySchedule, isActive }; // Fields to set/update
+    const filter = { branch, semester, section: section.toUpperCase(), term }; // Ensure section format consistency
+    const update = { weeklySchedule, isActive };
     const options = {
-      new: true, // Return the modified document rather than the original
-      upsert: true, // Create a document if one doesn't match the filter
-      runValidators: true, // Ensure schema validations are run on update
-      setDefaultsOnInsert: true, // Apply default values if inserting
+      new: true,
+      upsert: true,
+      runValidators: true,
+      setDefaultsOnInsert: true,
     };
 
     const updatedTimetable = await Timetable.findOneAndUpdate(
@@ -79,69 +85,20 @@ exports.upsertTimetable = async (req, res) => {
       options
     );
 
-    res.status(200).json(updatedTimetable); // 200 OK for update/upsert
+    res.status(200).json(updatedTimetable);
   } catch (err) {
     console.error("Upsert Timetable Error:", err);
     if (err.name === "ValidationError") {
       const messages = Object.values(err.errors).map((val) => val.message);
       return res.status(400).json({ message: messages.join(". ") });
     }
-    res.status(500).json({ error: "Failed to create or update timetable" });
+    if (err.code === 11000) {
+         return res.status(400).json({ message: "A timetable for this Branch, Semester, Section, and Term might already exist." });
+    }
+    res.status(500).json({ message: "Failed to create or update timetable", error: err.message });
   }
 };
 
-// --- Get Today's Schedule for Logged-in Student ---
-// exports.getStudentTodaySchedule = async (req, res) => {
-//   try {
-//     if (!req.user || req.user.role !== "student") {
-//       return res
-//         .status(403)
-//         .json({ message: "Access denied. Student role required." });
-//     }
-//     const { branch, currentSemester: semester, section } = req.user;
-//     const term = req.query.term || getCurrentTerm();
-
-//     if (!branch || !semester || !section) {
-//       return res.status(400).json({
-//         message: "Student details incomplete (branch, semester, section).",
-//       });
-//     }
-
-//     const dayOfWeek = new Date().toLocaleDateString("en-US", {
-//       weekday: "long",
-//     });
-
-//     const timetable = await Timetable.findOne({
-//       branch,
-//       semester,
-//       section,
-//       term,
-//       isActive: true,
-//     })
-//       .populate({
-//         path: `weeklySchedule.${dayOfWeek}.subject`,
-//         select: "subjectCode name -_id",
-//       })
-//       .populate({
-//         path: `weeklySchedule.${dayOfWeek}.professor`,
-//         select: "firstName lastName email -_id",
-//       }) // Fetch needed prof details
-//       .populate({
-//         path: `weeklySchedule.${dayOfWeek}.location`,
-//         select: "name building -_id",
-//       }); // Fetch needed loc details
-//     console.log(dayOfWeek);
-//     console.log(timetable.weeklySchedule?.[dayOfWeek]);
-//     if (!timetable || !timetable.weeklySchedule?.[dayOfWeek]) {
-//       return res.status(200).json([]); // No classes today
-//     }
-
-//     res.status(200).json(timetable.weeklySchedule[dayOfWeek]);
-//   } catch (err) {
-//     console.error("Get Student Schedule Error:", err);
-//     res.status(500).json({ error: "Server error fetching student schedule" });
-//   }
-// };
 
 exports.getStudentTodaySchedule = async (req, res) => {
   try {
@@ -153,23 +110,24 @@ exports.getStudentTodaySchedule = async (req, res) => {
         .json({ message: "Access denied. Student role required." });
     }
     const { branch, currentSemester: semester, section } = req.user;
-    // const term = req.query.term || getCurrentTerm(); // Use helper function
-    const term = req.query.term;
+    const term = req.query.term; // Get term from query parameter
 
-    
+    if (!term) {
+      console.warn("[getStudentTodaySchedule] Term query parameter is missing.");
+      return res.status(400).json({ message: "Term query parameter is required (e.g., ?term=FALL%202024)." });
+    }
+
     if (!branch || !semester || !section) {
+      console.warn(`[getStudentTodaySchedule] Student details incomplete: Branch=${branch}, Semester=${semester}, Section=${section}`);
       return res.status(400).json({
-        message: "Student details incomplete (branch, semester, section).",
+        message: "Student details incomplete (branch, semester, section). Cannot fetch schedule.",
       });
     }
 
     const serverNow = new Date();
-    const dayOfWeek = new Date().toLocaleDateString("en-US", {
-      weekday: "long",
-    }); // e.g., "Saturday"
-
+    const dayOfWeek = serverNow.toLocaleDateString("en-US", { weekday: "long" });
     console.log(`[getStudentTodaySchedule] Server Time: ${serverNow.toISOString()}, Calculated Day: ${dayOfWeek}`);
-    
+
     console.log(
       `Fetching timetable for: Branch=${branch}, Semester=${semester}, Section=${section}, Term=${term}, Day=${dayOfWeek}`
     );
@@ -178,52 +136,62 @@ exports.getStudentTodaySchedule = async (req, res) => {
       branch,
       semester,
       section,
-      term,
-      isActive: true, // Ensure we only get active timetables
+      term: term, // Use term from query
+      isActive: true,
     })
       .populate({
-        // Populate the fields within the specific day's array
         path: `weeklySchedule.${dayOfWeek}.subject`,
-        select: "subjectCode name -_id", // Select specific fields from Subject
+        // *** FIXED: Include _id ***
+        select: "subjectCode name _id",
       })
       .populate({
         path: `weeklySchedule.${dayOfWeek}.professor`,
-        select: "firstName lastName email -_id", // Select specific fields from User (Professor)
+        // *** FIXED: Include _id ***
+        select: "firstName lastName email _id",
       })
       .populate({
         path: `weeklySchedule.${dayOfWeek}.location`,
-        select: "name building -_id", // Select specific fields from Location
+         // *** FIXED: Include _id ***
+        select: "name building _id",
       });
 
-    // *** IMPORTANT FIX: Check if timetable was found FIRST ***
     if (!timetable) {
-      console.log("No matching timetable found for the student.");
-      // It's correct to return an empty array if no timetable exists
-      return res.status(200).json([]);
+      console.log(`No matching timetable found for: Branch=${branch}, Sem=${semester}, Sec=${section}, Term=${term}`);
+      return res.status(200).json([]); // No timetable found
     }
 
-    // Now it's safe to check the schedule for the specific day
-    console.log(`Timetable found. Checking schedule for ${dayOfWeek}.`);
-    // Use optional chaining ?. just in case weeklySchedule or the day itself is missing
-    const todaysSchedule = timetable.weeklySchedule?.[dayOfWeek];
+    console.log(`Timetable found (ID: ${timetable._id}). Checking schedule for ${dayOfWeek}.`);
+    const todaysSchedule = timetable.weeklySchedule?.[dayOfWeek]; // Use optional chaining
 
-    console.log(`[getStudentTodaySchedule] Responding with schedule for ${dayOfWeek}. Found: ${todaysSchedule ? todaysSchedule.length : 'None'}`);
-    // Check if there's actually a schedule array for today or if it's empty
     if (!todaysSchedule || todaysSchedule.length === 0) {
-      console.log(`No classes scheduled for ${dayOfWeek}.`);
-      return res.status(200).json([]); // Return empty array if no classes today
+      console.log(`No classes scheduled in timetable for ${dayOfWeek}.`);
+      return res.status(200).json([]); // No classes for this specific day
     }
+
+    // --- Modification: Add 'term' to each slot object ---
+    // *** FIXED: Use correct variable name 'todaysSchedule' ***
+    const todaysScheduleWithTerm = todaysSchedule.map(slot => {
+      // Convert Mongoose subdocument to plain object if needed
+      const plainSlot = typeof slot.toObject === 'function' ? slot.toObject() : { ...slot };
+      return {
+          ...plainSlot,
+          term: timetable.term // Add the term from the parent document
+      };
+    });
+    // --- End Modification ---
 
     
-    // If we reach here, we have classes for today
-    console.log(`Found ${todaysSchedule.length} classes for ${dayOfWeek}.`);
-    res.status(200).json(todaysSchedule);
+    console.log(`[getStudentTodaySchedule] Responding with ${todaysScheduleWithTerm.length} classes for ${dayOfWeek}.`);
+    // *** FIXED: Send the modified array with the term included ***
+    res.status(200).json(todaysScheduleWithTerm);
+
   } catch (err) {
-    console.error("Get Student Schedule Error:", err);
-    res.status(500).json({ error: "Server error fetching student schedule" });
+    console.error("[getStudentTodaySchedule] Error:", err);
+    res.status(500).json({ message: "Server error fetching student schedule", error: err.message });
   }
 };
 
+// --- Get Today's Schedule for Logged-in Professor ---
 // --- Get Today's Schedule for Logged-in Professor ---
 exports.getProfessorTodaySchedule = async (req, res) => {
   try {
@@ -233,47 +201,58 @@ exports.getProfessorTodaySchedule = async (req, res) => {
         .json({ message: "Access denied. Professor role required." });
     }
     const professorId = req.user._id;
-    const term = req.query.term || getCurrentTerm();
-    const dayOfWeek = new Date().toLocaleDateString("en-US", {
-      weekday: "long",
-    });
+    const term = req.query.term || getCurrentTerm(); // Allow query param or fallback
+    const dayOfWeek = new Date().toLocaleDateString("en-US", { weekday: "long" });
 
-    // Find timetables where this professor teaches on this day in this term
+    console.log(`Fetching professor schedule for ProfID=${professorId}, Term=${term}, Day=${dayOfWeek}`);
+
     const query = {
       term: term,
       isActive: true,
-      [`weeklySchedule.${dayOfWeek}.professor`]: professorId, // Query nested array
+      [`weeklySchedule.${dayOfWeek}.professor`]: professorId,
     };
 
     const timetables = await Timetable.find(query)
-      .select(`branch semester section weeklySchedule.${dayOfWeek}`) // Select relevant parts
+      .select(`branch semester section weeklySchedule.${dayOfWeek}`)
       .populate({
         path: `weeklySchedule.${dayOfWeek}.subject`,
-        select: "subjectCode name -_id",
+        // *** FIXED: Include _id ***
+        select: "subjectCode name _id",
+      })
+       .populate({
+          path: `weeklySchedule.${dayOfWeek}.professor`, // Populate professor to get their ID easily if needed later
+           // *** FIXED: Include _id (though we query by it, good practice) ***
+          select: "firstName lastName email _id",
       })
       .populate({
         path: `weeklySchedule.${dayOfWeek}.location`,
-        select: "name building -_id",
+         // *** FIXED: Include _id ***
+        select: "name building _id",
       })
-      // No need to populate professor, we know it's the logged-in one
       .lean(); // Use lean for performance
 
     let professorClasses = [];
     timetables.forEach((tt) => {
       if (tt.weeklySchedule?.[dayOfWeek]) {
         tt.weeklySchedule[dayOfWeek].forEach((slot) => {
-          // Double check the professor ID matches (though query should ensure this)
-          if (slot.professor && slot.professor.equals(professorId)) {
+          // This check might be redundant because of the initial query, but safe
+          if (slot.professor && slot.professor._id.equals(professorId)) { // Compare IDs after population
             professorClasses.push({
+              // Pass plain slot object properties
               startTime: slot.startTime,
               endTime: slot.endTime,
-              subject: slot.subject, // Already populated object
-              location: slot.location, // Already populated object
+              subject: slot.subject, // Includes _id, subjectCode, name
+              location: slot.location, // Includes _id, name, building
+              professor: slot.professor, // Includes _id, firstName, lastName, email
               // Add context
               branch: tt.branch,
               semester: tt.semester,
               section: tt.section,
-              term: term,
+              term: term, // Add term
+              // Include IDs directly if preferred by client (redundant with nested objects)
+              // subjectId: slot.subject?._id,
+              // locationId: slot.location?._id,
+              // professorId: slot.professor?._id
             });
           }
         });
@@ -281,11 +260,14 @@ exports.getProfessorTodaySchedule = async (req, res) => {
     });
 
     professorClasses.sort((a, b) => a.startTime.localeCompare(b.startTime));
+    console.log(`Found ${professorClasses.length} classes for professor ${professorId} on ${dayOfWeek}.`);
     res.status(200).json(professorClasses);
+
   } catch (err) {
     console.error("Get Professor Schedule Error:", err);
-    res.status(500).json({ error: "Server error fetching professor schedule" });
+    res.status(500).json({ message: "Server error fetching professor schedule.", error: err.message });
   }
 };
+
 
 // TODO: Add controllers for GET / (all timetables), GET /:id, DELETE /:id (Admin only)
