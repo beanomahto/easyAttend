@@ -1,25 +1,24 @@
 // server.js
-const express = require('express');
-const dotenv = require('dotenv');
-const cors = require('cors');
-const http = require('http');
+const express = require("express");
+const dotenv = require("dotenv");
+const cors = require("cors");
+const http = require("http");
 // Remove socket.io for now unless implemented
-const { Server } = require('socket.io');
-const connectDB = require('./config/db');
+const { Server } = require("socket.io");
+const connectDB = require("./config/db");
 
 // --- Load Config & Connect DB ---
 dotenv.config();
 connectDB();
 
 // --- Route Imports ---
-const authRoutes = require('./routes/authRoutes');
-const locationRoutes = require('./routes/locationRoutes');
-const subjectRoutes = require('./routes/subjectRoutes');
-const timetableRoutes = require('./routes/timetableRoutes');
-const userRoutes = require('./routes/userRoutes');
-const attendanceRoutes = require('./routes/attendanceRoutes');
+const authRoutes = require("./routes/authRoutes");
+const locationRoutes = require("./routes/locationRoutes");
+const subjectRoutes = require("./routes/subjectRoutes");
+const timetableRoutes = require("./routes/timetableRoutes");
+const userRoutes = require("./routes/userRoutes");
+const attendanceRoutes = require("./routes/attendanceRoutes");
 // Add other routes like attendanceRoutes later
-
 
 const app = express();
 const server = http.createServer(app); // Create HTTP server
@@ -28,10 +27,9 @@ const server = http.createServer(app); // Create HTTP server
 const io = new Server(server, {
   cors: {
     origin: "*", // Restrict this in production (e.g., your frontend URL)
-    methods: ["GET", "POST"]
-  }
+    methods: ["GET", "POST"],
+  },
 });
-
 
 // --- Middleware ---
 app.use(cors());
@@ -44,41 +42,39 @@ app.use((req, res, next) => {
   next();
 });
 
-
 // --- API Routes ---
 // --- API Routes ---
-app.get('/', (req, res) => res.send('Attendance API Running...')); // Health check route
-app.use('/api/auth', authRoutes);
-app.use('/api/locations', locationRoutes);
-app.use('/api/subjects', subjectRoutes);
-app.use('/api/timetables', timetableRoutes);
-app.use('/api/users', userRoutes);
-app.use('/api/attendance', attendanceRoutes);
+app.get("/", (req, res) => res.send("Attendance API Running...")); // Health check route
+app.use("/api/auth", authRoutes);
+app.use("/api/locations", locationRoutes);
+app.use("/api/subjects", subjectRoutes);
+app.use("/api/timetables", timetableRoutes);
+app.use("/api/users", userRoutes);
+app.use("/api/attendance", attendanceRoutes);
 // Mount other routes here...
 
 // --- Socket.IO Setup (Example - requires implementation) ---
 // --- Socket.IO Connection Logic (Optional: Can be in a separate file) ---
-io.on('connection', (socket) => {
-  console.log('Socket.IO user connected:', socket.id);
+io.on("connection", (socket) => {
+  console.log("Socket.IO user connected:", socket.id);
 
   // Listen for clients joining specific session rooms
-  socket.on('joinSessionRoom', (roomName) => {
-      console.log(socket.id, "joining room", roomName);
-      socket.join(roomName);
-      // You could potentially emit current attendance state to the joining client here
+  socket.on("joinSessionRoom", (roomName) => {
+    console.log(socket.id, "joining room", roomName);
+    socket.join(roomName);
+    // You could potentially emit current attendance state to the joining client here
   });
 
-  socket.on('leaveSessionRoom', (roomName) => {
-      console.log(socket.id, "leaving room", roomName);
-      socket.leave(roomName);
+  socket.on("leaveSessionRoom", (roomName) => {
+    console.log(socket.id, "leaving room", roomName);
+    socket.leave(roomName);
   });
 
-  socket.on('disconnect', () => {
-    console.log('Socket.IO user disconnected:', socket.id);
+  socket.on("disconnect", () => {
+    console.log("Socket.IO user disconnected:", socket.id);
     // Optional: Handle cleanup if needed (e.g., remove from all rooms)
   });
 });
-
 
 // --- Error Handling Middleware (Place AFTER all routes) ---
 // Not Found Handler
@@ -107,6 +103,7 @@ server.listen(PORT, () =>
   )
 );
 
+//socket
 // Handle unhandled promise rejections
 process.on("unhandledRejection", (err, promise) => {
   console.error(`Unhandled Rejection: ${err.name}`, err.message);
