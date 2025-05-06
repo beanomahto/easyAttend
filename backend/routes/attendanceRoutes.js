@@ -10,6 +10,14 @@ router.post("/check-in", protect, restrictTo('student'), attendanceController.ma
 // POST /api/attendance/check-out - Student manual check-out
 router.post("/check-out", protect, restrictTo('student'), attendanceController.manualCheckOut);
 
+// --- GET /api/attendance/student/current-session-status - Student gets their current session status ---
+router.get(
+    "/student/current-session-status",
+    protect,
+    restrictTo('student'),
+    attendanceController.getStudentCurrentSessionStatus
+);
+
 // GET /api/attendance/student/history - Student gets their history (filtered by query params)
 router.get("/student/history", protect, restrictTo('student'), attendanceController.getStudentAttendanceHistory);
 
