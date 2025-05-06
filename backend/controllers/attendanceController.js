@@ -33,26 +33,34 @@ function addMinutesToTime(timeStr, minutes) {
 // Returns true if point [lng, lat] is within radius of center [lng, lat]
 function isWithinRadius(pointCoords, centerCoords, radiusMeters) {
     if (!pointCoords || !centerCoords || !radiusMeters || pointCoords.length !== 2 || centerCoords.length !== 2) {
+        console.warn("isWithinRadius: Invalid input parameters.");
         return false;
     }
     // **VERY basic placeholder - Euclidean distance on degrees (NOT accurate globally!)**
     // **REPLACE THIS WITH A PROPER HAVERSINE IMPLEMENTATION**
     const R = 6371e3; // Earth radius in meters
-    const lat1 = pointCoords[1] * Math.PI/180; // φ, λ in radians
-    const lat2 = centerCoords[1] * Math.PI/180;
-    const deltaLat = (centerCoords[1]-pointCoords[1]) * Math.PI/180;
-    const deltaLon = (centerCoords[0]-pointCoords[0]) * Math.PI/180;
+    const lat1 = pointCoords[1] * Math.PI / 180; // φ, λ in radians
+    const lat2 = centerCoords[1] * Math.PI / 180;
+    const deltaLat = (centerCoords[1] - pointCoords[1]) * Math.PI / 180;
+    const deltaLon = (centerCoords[0] - pointCoords[0]) * Math.PI / 180;
 
-    const a = Math.sin(deltaLat/2) * Math.sin(deltaLat/2) +
-              Math.cos(lat1) * Math.cos(lat2) *
-              Math.sin(deltaLon/2) * Math.sin(deltaLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    const a = Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
+        Math.cos(lat1) * Math.cos(lat2) *
+        Math.sin(deltaLon / 2) * Math.sin(deltaLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 
     const distance = R * c; // in metres
 
-    console.log(`Distance calculated: ${distance}m, Radius: ${radiusMeters}m`); // For debugging
+    console.log(`[GeoCheck] Distance: ${distance.toFixed(2)}m, Required Radius (with buffer): ${radiusMeters}m, Classroom Radius: ${radiusMeters - LOCATION_CHECK_RADIUS_METERS_BUFFER}m`);
     return distance <= radiusMeters;
 }
+
+// --- Populate Helper ---
+const populateRecordFields = [
+    { path: 'subject', select: 'subjectCode name _id' }, // Make sure _id is selected
+    { path: 'professor', select: 'firstName lastName email _id' }, // Make sure _id is selected
+    { path: 'location', select: 'name building _id' } // Make sure _id is selected
+];
 
 
 // --- Controller Methods ---
@@ -64,12 +72,12 @@ function isWithinRadius(pointCoords, centerCoords, radiusMeters) {
  */
 exports.manualCheckIn = async (req, res) => {
     const studentId = req.user._id;
-    const io = req.io; // Get io instance from request object
+    const io = req.io;
     const {
-        subjectId, professorId, locationId, classDateStr, // Class identifiers
-        scheduledStartTime, scheduledEndTime, term, // Schedule details
-        currentTimeStr, latitude, longitude, accuracy, // Current state from App
-        detectedBSSIDs = [], isMockDetected, deviceId // Validation data from App
+        subjectId, professorId, locationId, classDateStr,
+        scheduledStartTime, scheduledEndTime, term,
+        currentTimeStr, latitude, longitude, accuracy,
+        detectedBSSIDs = [], isMockDetected, deviceId
     } = req.body;
 
     // --- Basic Input Validation ---
@@ -84,147 +92,107 @@ exports.manualCheckIn = async (req, res) => {
         // --- Time Window Check ---
         const checkinEndTime = addMinutesToTime(scheduledStartTime, CHECKIN_WINDOW_MINUTES);
         if (!checkinEndTime || !isTimeWithinWindow(currentTimeStr, scheduledStartTime, checkinEndTime)) {
-            return res.status(400).json({ message: `Check-in only allowed between ${scheduledStartTime} and ${checkinEndTime}. Current time: ${currentTimeStr}` });
+            return res.status(400).json({ message: `Check-in window: ${scheduledStartTime} - ${checkinEndTime}. Current: ${currentTimeStr}. Check-in closed/not open.` });
         }
 
-        // --- Fetch User for Device ID check ---
-        const user = await User.findById(studentId).select('+boundDeviceId').lean(); // Use lean for read-only
+        const user = await User.findById(studentId).select('+boundDeviceId').lean();
         if (!user) return res.status(404).json({ message: "Student not found." });
 
-        // --- Fetch Location for Geo/WiFi check ---
-        const location = await Location.findById(locationId).lean();
-        if (!location || !location.location || !location.location.coordinates) {
+        const classLocation = await Location.findById(locationId).lean(); // Renamed
+        if (!classLocation || !classLocation.location || !classLocation.location.coordinates) {
             return res.status(404).json({ message: "Classroom location details not found." });
         }
 
         // --- Perform Validations ---
         const deviceIdMatch = !!user.boundDeviceId && user.boundDeviceId === deviceId;
-        const geoPassed = isWithinRadius(
-            [longitude, latitude],
-            location.location.coordinates,
-            location.radiusMeters + LOCATION_CHECK_RADIUS_METERS_BUFFER // Add buffer
-        );
-        const wifiPassed = location.trustedWifiBSSIDs && location.trustedWifiBSSIDs.length > 0
-            ? location.trustedWifiBSSIDs.some(trustedBssid => detectedBSSIDs.includes(trustedBssid))
-            : true; // If no trusted BSSIDs are configured, bypass Wi-Fi check (configurable policy)
+        const geoPassed = isWithinRadius([longitude, latitude], classLocation.location.coordinates, classLocation.radiusMeters + LOCATION_CHECK_RADIUS_METERS_BUFFER);
+        const wifiPassed = classLocation.trustedWifiBSSIDs && classLocation.trustedWifiBSSIDs.length > 0
+            ? classLocation.trustedWifiBSSIDs.some(trustedBssid => detectedBSSIDs.includes(trustedBssid))
+            : true;
 
-
-        // --- Assemble Validation Data ---
         const checkInData = {
-            method: 'Manual',
-            timestamp: new Date(), // Server time is more reliable
-            geoPassed,
-            wifiPassed,
-            mockDetected: !!isMockDetected, // Ensure boolean
-            deviceIdMatch,
-            deviceReportedId: deviceId,
+            method: 'Manual', timestamp: new Date(), geoPassed, wifiPassed,
+            mockDetected: !!isMockDetected, deviceIdMatch, deviceReportedId: deviceId,
             locationAccuracy: accuracy,
             coordinates: { type: 'Point', coordinates: [longitude, latitude] },
             detectedBSSIDs: Array.isArray(detectedBSSIDs) ? detectedBSSIDs : []
         };
 
         // --- Apply Validation Rules ---
-        if (checkInData.mockDetected) {
-            return res.status(403).json({ message: "Check-in failed: Mock location detected.", validation: checkInData });
-        }
+        if (checkInData.mockDetected) return res.status(403).json({ message: "Check-in failed: Mock location detected.", validation: checkInData });
         if (!checkInData.deviceIdMatch) {
-             if (!user.boundDeviceId) {
-                 return res.status(403).json({ message: "Check-in failed: Device not bound to this account.", validation: checkInData });
-             } else {
-                 return res.status(403).json({ message: "Check-in failed: Device ID mismatch.", validation: checkInData });
-             }
+            return res.status(403).json({ message: user.boundDeviceId ? "Check-in failed: Device ID mismatch." : "Check-in failed: Device not bound to this account.", validation: checkInData });
         }
-        if (!checkInData.geoPassed) {
-            return res.status(403).json({ message: "Check-in failed: Outside designated classroom area.", validation: checkInData });
-        }
-        if (!checkInData.wifiPassed && location.trustedWifiBSSIDs?.length > 0) { // Only fail if trusted list exists & no match
-            return res.status(403).json({ message: "Check-in failed: Classroom Wi-Fi environment mismatch.", validation: checkInData });
-        }
+        if (!checkInData.geoPassed) return res.status(403).json({ message: "Check-in failed: Outside designated classroom area.", validation: checkInData });
+        if (!checkInData.wifiPassed && classLocation.trustedWifiBSSIDs?.length > 0) return res.status(403).json({ message: "Check-in failed: Classroom Wi-Fi environment mismatch.", validation: checkInData });
 
-        // --- Check if Already Checked In ---
-        const classDateObject = new Date(classDateStr); // Assumes YYYY-MM-DD
-        classDateObject.setUTCHours(0, 0, 0, 0); // Normalize to midnight UTC
+        const classDateObject = new Date(classDateStr);
+        classDateObject.setUTCHours(0, 0, 0, 0);
+
+        const formattedDateForRoom = classDateObject.toISOString().split('T')[0];
+        const room = `session-${professorId}-${subjectId}-${formattedDateForRoom}-${scheduledStartTime}`;
+
+        let recordToRespond; // Define here to be accessible in all paths
+        let httpStatus = 200; // Default to 200 for update
+        let actionTypeForSocket = 'UPDATE'; // Default to update
 
         const existingRecord = await AttendanceRecord.findOne({
-            student: studentId,
-            subject: subjectId,
-            classDate: classDateObject,
-            scheduledStartTime: scheduledStartTime
+            student: studentId, subject: subjectId, classDate: classDateObject, scheduledStartTime: scheduledStartTime, term: term
         });
 
-        // --- Define the Socket.IO Room Name ---
-        // Needs to be consistent and specific to the class session
-        const classDateObjectForRoom = new Date(classDateStr); // Ensure consistent date formatting for room name
-        const formattedDate = classDateObjectForRoom.toISOString().split('T')[0]; // YYYY-MM-DD format
-        const room = `session-${professorId}-${subjectId}-${formattedDate}-${scheduledStartTime}`;
-
-
-
-        if (existingRecord && existingRecord.status === 'Present') {
-            return res.status(200).json({ message: "Already checked in for this class.", record: existingRecord });
-        }
-         if (existingRecord && existingRecord.checkIn) {
-             // Could be 'Late', 'Absent' etc. but has a checkIn attempt maybe? Decide policy.
-             // For now, let's overwrite/update if not 'Present'
-             console.log(`Existing record found with status ${existingRecord.status}, updating.`);
-             existingRecord.checkIn = checkInData;
-             existingRecord.status = 'Present'; // Or 'Late' if currentTime > startTime + grace period?
-             await existingRecord.save();
-
-             // --- Socket.IO Emission (Placeholder) ---
-             // const room = `${professorId}-${subjectId}-${classDateStr}-${scheduledStartTime}`;
-             // if (req.io) req.io.to(room).emit('attendanceUpdate', { studentId, status: 'Present', record: existingRecord });
-
-              // --- Socket.IO Emission ---
-            if (io) {
-                io.to(room).emit('attendanceUpdate', {
-                    type: 'UPDATE',
-                    studentId: existingRecord.student, // Send student ID
-                    status: existingRecord.status,
-                    recordId: existingRecord._id,
-                    checkInTime: existingRecord.checkIn?.timestamp,
-                    // Include other relevant details if needed by frontend
-                });
+        if (existingRecord) {
+            if (existingRecord.checkIn && (existingRecord.status === 'Pending' || existingRecord.status === 'Present')) {
+                recordToRespond = await AttendanceRecord.findById(existingRecord._id).populate(populateRecordFields);
+                return res.status(200).json({ message: `Already ${existingRecord.status.toLowerCase()} for this class.`, record: recordToRespond });
             }
-
-             return res.status(200).json({ message: "Attendance record updated to Present.", record: existingRecord });
+            console.log(`Existing record found (status: ${existingRecord.status}), updating check-in and setting to Pending.`);
+            existingRecord.checkIn = checkInData;
+            existingRecord.status = 'Pending';
+            existingRecord.checkOut = undefined;
+            await existingRecord.save();
+            recordToRespond = existingRecord;
+        } else {
+            console.log("No existing record, creating new one with status Pending.");
+            const newRecord = new AttendanceRecord({
+                student: studentId, subject: subjectId, professor: professorId, location: locationId,
+                classDate: classDateObject, scheduledStartTime, scheduledEndTime, term,
+                checkIn: checkInData, status: 'Pending',
+            });
+            await newRecord.save();
+            recordToRespond = newRecord;
+            httpStatus = 201; // Set to 201 for created
+            actionTypeForSocket = 'CREATE';
         }
 
-        // --- Create New Record ---
-        const newRecord = new AttendanceRecord({
-            student: studentId,
-            subject: subjectId,
-            professor: professorId,
-            location: locationId,
-            classDate: classDateObject,
-            scheduledStartTime,
-            scheduledEndTime,
-            term,
-            checkIn: checkInData,
-            status: 'Present', // Consider 'Late' logic based on time if needed
-        });
+        // *** POPULATE the recordToRespond using its own _id before sending it back ***
+        const populatedRecord = await AttendanceRecord.findById(recordToRespond._id).populate(populateRecordFields);
 
-        await newRecord.save();
+        if (!populatedRecord) { // Should not happen if save was successful
+            console.error("Error: Record was saved/updated but could not be found for population immediately after.");
+            return res.status(500).json({ message: "Internal server error after processing check-in." });
+        }
 
-         // --- Socket.IO Emission ---
         if (io) {
-             io.to(room).emit('attendanceUpdate', {
-                type: 'CREATE', // Indicate a new record was created
-                studentId: newRecord.student,
-                status: newRecord.status,
-                recordId: newRecord._id,
-                checkInTime: newRecord.checkIn?.timestamp,
-                // Include student name etc. if needed, or let frontend fetch if necessary
+            io.to(room).emit('attendanceUpdate', {
+                type: actionTypeForSocket, studentId: populatedRecord.student,
+                status: populatedRecord.status, recordId: populatedRecord._id,
+                checkInTime: populatedRecord.checkIn?.timestamp,
+                subjectName: populatedRecord.subject?.name,
+                professorName: `${populatedRecord.professor?.firstName} ${populatedRecord.professor?.lastName}`,
             });
         }
 
-        res.status(201).json({ message: "Check-in successful.", record: newRecord });
+        res.status(httpStatus).json({
+            message: `Check-in successful. Status: ${populatedRecord.status}.`,
+            record: populatedRecord
+        });
 
     } catch (error) {
         console.error("Manual Check-In Error:", error);
-        res.status(500).json({ message: "Server error during check-in." });
+        res.status(500).json({ message: "Server error during check-in.", error: error.message });
     }
 };
+
 
 /**
  * @desc    Student manually checks out from a class
@@ -233,134 +201,110 @@ exports.manualCheckIn = async (req, res) => {
  */
 exports.manualCheckOut = async (req, res) => {
     const studentId = req.user._id;
-    const io = req.io; // Get io instance from request object
-     // Need identifiers to find the specific record + validation data
-     const {
-        attendanceRecordId, // Preferred way to identify the record
-        // OR fallback identifiers if ID not sent:
-        subjectId, classDateStr, scheduledStartTime,
-        // Validation data:
+    const io = req.io;
+    const {
+        attendanceRecordId,
         currentTimeStr, latitude, longitude, accuracy,
         detectedBSSIDs = [], isMockDetected, deviceId
     } = req.body;
 
-    // --- Basic Input Validation ---
-     if (!attendanceRecordId && (!subjectId || !classDateStr || !scheduledStartTime)) {
-         return res.status(400).json({ message: "Missing attendanceRecordId or subject/date/time to identify the class session." });
-     }
-     if (!currentTimeStr || latitude == null || longitude == null || isMockDetected == null || !deviceId) {
-        return res.status(400).json({ message: "Missing required fields for check-out validation." });
+    if (!attendanceRecordId || !mongoose.Types.ObjectId.isValid(attendanceRecordId)) {
+        return res.status(400).json({ message: "Valid attendanceRecordId is required for check-out." });
+    }
+    if (!currentTimeStr || latitude == null || longitude == null || isMockDetected == null || !deviceId) {
+       return res.status(400).json({ message: "Missing required fields for check-out validation." });
     }
 
-
     try {
-         // --- Find the Record to Update ---
-         let recordToUpdate;
-         if (attendanceRecordId && mongoose.Types.ObjectId.isValid(attendanceRecordId)) {
-            recordToUpdate = await AttendanceRecord.findOne({ _id: attendanceRecordId, student: studentId });
-         } else if (subjectId && classDateStr && scheduledStartTime) {
-             const classDateObject = new Date(classDateStr);
-             classDateObject.setUTCHours(0, 0, 0, 0);
-             recordToUpdate = await AttendanceRecord.findOne({
-                student: studentId,
-                subject: subjectId,
-                classDate: classDateObject,
-                scheduledStartTime: scheduledStartTime,
-                status: 'Present' // Only allow checkout if currently 'Present'
-             });
-         }
+        const recordToUpdate = await AttendanceRecord.findOne({ _id: attendanceRecordId, student: studentId });
 
-         if (!recordToUpdate) {
-             return res.status(404).json({ message: "No active 'Present' attendance record found for this class session to check out from." });
-         }
-         if (recordToUpdate.checkOut) {
-             return res.status(200).json({ message: "Already checked out for this class.", record: recordToUpdate });
-         }
-
-        // --- Time Window Check ---
-        const checkoutStartTime = recordToUpdate.scheduledEndTime; // Can checkout exactly at end time
-        const checkoutEndTime = addMinutesToTime(recordToUpdate.scheduledEndTime, CHECKOUT_WINDOW_MINUTES);
-        if (!checkoutEndTime || !isTimeWithinWindow(currentTimeStr, checkoutStartTime, checkoutEndTime)) {
-            return res.status(400).json({ message: `Check-out only allowed between ${checkoutStartTime} and ${checkoutEndTime}. Current time: ${currentTimeStr}` });
+        if (!recordToUpdate) {
+            return res.status(404).json({ message: "Attendance record not found or does not belong to you." });
+        }
+        if (recordToUpdate.status !== 'Pending') {
+            const populatedRecordOnError = await AttendanceRecord.findById(recordToUpdate._id).populate(populateRecordFields);
+            return res.status(400).json({ message: `Cannot check out. Current status is: ${recordToUpdate.status}.`, record: populatedRecordOnError });
+        }
+        if (recordToUpdate.checkOut) {
+            const populatedRecordOnError = await AttendanceRecord.findById(recordToUpdate._id).populate(populateRecordFields);
+            return res.status(200).json({ message: "Already checked out for this class.", record: populatedRecordOnError });
         }
 
-         // --- Fetch User & Location for validation (if needed again) ---
-         // Optimisation: If check-in data is trusted, maybe skip some re-checks?
-         // For robustness, re-validate.
-         const user = await User.findById(studentId).select('+boundDeviceId').lean();
-         if (!user) return res.status(404).json({ message: "Student not found." });
-         const location = await Location.findById(recordToUpdate.location).lean(); // Get location from the record
-         if (!location || !location.location || !location.location.coordinates) {
-             return res.status(404).json({ message: "Classroom location details not found for validation." });
-         }
+        // --- Time Window Check ---
+        const checkoutStartTime = recordToUpdate.scheduledEndTime;
+        const checkoutEndTime = addMinutesToTime(recordToUpdate.scheduledEndTime, CHECKOUT_WINDOW_MINUTES);
+        if (!checkoutEndTime || !isTimeWithinWindow(currentTimeStr, checkoutStartTime, checkoutEndTime)) {
+            return res.status(400).json({ message: `Check-out window: ${checkoutStartTime} - ${checkoutEndTime}. Current: ${currentTimeStr}. Check-out closed.` });
+        }
 
-        // --- Perform Validations (Similar to Check-in) ---
+        const user = await User.findById(studentId).select('+boundDeviceId').lean();
+        if (!user) return res.status(404).json({ message: "Student not found (internal error)." });
+
+        const classLocation = await Location.findById(recordToUpdate.location).lean(); // Get location from record
+        if (!classLocation || !classLocation.location || !classLocation.location.coordinates) {
+            return res.status(404).json({ message: "Classroom location details not found for validation." });
+        }
+
+        // --- Perform Validations ---
         const deviceIdMatch = !!user.boundDeviceId && user.boundDeviceId === deviceId;
-        const geoPassed = isWithinRadius(
-            [longitude, latitude],
-            location.location.coordinates,
-            location.radiusMeters + LOCATION_CHECK_RADIUS_METERS_BUFFER
-        );
-         const wifiPassed = location.trustedWifiBSSIDs && location.trustedWifiBSSIDs.length > 0
-            ? location.trustedWifiBSSIDs.some(trustedBssid => detectedBSSIDs.includes(trustedBssid))
+        const geoPassed = isWithinRadius([longitude, latitude], classLocation.location.coordinates, classLocation.radiusMeters + LOCATION_CHECK_RADIUS_METERS_BUFFER);
+        const wifiPassed = classLocation.trustedWifiBSSIDs && classLocation.trustedWifiBSSIDs.length > 0
+            ? classLocation.trustedWifiBSSIDs.some(trustedBssid => detectedBSSIDs.includes(trustedBssid))
             : true;
 
-        // --- Assemble Validation Data ---
         const checkOutData = {
-            method: 'Manual',
-            timestamp: new Date(),
-            geoPassed,
-            wifiPassed,
-            mockDetected: !!isMockDetected,
-            deviceIdMatch,
-            deviceReportedId: deviceId,
+            method: 'Manual', timestamp: new Date(), geoPassed, wifiPassed,
+            mockDetected: !!isMockDetected, deviceIdMatch, deviceReportedId: deviceId,
             locationAccuracy: accuracy,
             coordinates: { type: 'Point', coordinates: [longitude, latitude] },
             detectedBSSIDs: Array.isArray(detectedBSSIDs) ? detectedBSSIDs : []
         };
 
         // --- Apply Validation Rules ---
-        if (checkOutData.mockDetected) {
-            return res.status(403).json({ message: "Check-out failed: Mock location detected.", validation: checkOutData });
-        }
-        if (!checkOutData.deviceIdMatch) {
-             return res.status(403).json({ message: "Check-out failed: Device ID mismatch.", validation: checkOutData });
-        }
-        if (!checkOutData.geoPassed) {
-            return res.status(403).json({ message: "Check-out failed: Must be inside designated area to check out.", validation: checkOutData });
-        }
-        if (!checkOutData.wifiPassed && location.trustedWifiBSSIDs?.length > 0) {
-            return res.status(403).json({ message: "Check-out failed: Classroom Wi-Fi environment mismatch.", validation: checkOutData });
-        }
+        if (checkOutData.mockDetected) return res.status(403).json({ message: "Check-out failed: Mock location detected.", validation: checkOutData });
+        if (!checkOutData.deviceIdMatch) return res.status(403).json({ message: "Check-out failed: Device ID mismatch.", validation: checkOutData });
+        if (!checkOutData.geoPassed) return res.status(403).json({ message: "Check-out failed: Must be inside designated area.", validation: checkOutData });
+        if (!checkOutData.wifiPassed && classLocation.trustedWifiBSSIDs?.length > 0) return res.status(403).json({ message: "Check-out failed: Wi-Fi mismatch.", validation: checkOutData });
 
         // --- Update Record ---
         recordToUpdate.checkOut = checkOutData;
-        // Optionally update status if needed (e.g., based on check-out time vs scheduled end time)
-        // recordToUpdate.status = 'Present'; // Assuming checkout confirms presence for the duration
-
+        if (recordToUpdate.checkIn) { // Should be true if status was 'Pending'
+             recordToUpdate.status = 'Present';
+        } else {
+            console.warn(`Check-out performed for record ${recordToUpdate._id} without a prior check-in. Status remains ${recordToUpdate.status}.`);
+        }
         await recordToUpdate.save();
 
-        // --- Define Room Name (consistent with check-in) ---
-        const classDateObjectForRoom = recordToUpdate.classDate; // Use date from the record
-        const formattedDate = classDateObjectForRoom.toISOString().split('T')[0];
-        const room = `session-${recordToUpdate.professor}-${recordToUpdate.subject}-${formattedDate}-${recordToUpdate.scheduledStartTime}`;
+        // *** POPULATE before sending response ***
+        const populatedRecord = await AttendanceRecord.findById(recordToUpdate._id).populate(populateRecordFields);
 
-        // --- Socket.IO Emission ---
+        if (!populatedRecord) {
+            console.error("Error: Record was saved for checkout but could not be found for population.");
+            return res.status(500).json({ message: "Internal server error after processing check-out." });
+        }
+
+        const formattedDateForRoom = populatedRecord.classDate.toISOString().split('T')[0];
+        const room = `session-${populatedRecord.professor._id}-${populatedRecord.subject._id}-${formattedDateForRoom}-${populatedRecord.scheduledStartTime}`;
+
         if (io) {
-             io.to(room).emit('attendanceUpdate', {
-                type: 'UPDATE', // Indicate an existing record was updated
-                studentId: recordToUpdate.student,
-                status: recordToUpdate.status,
-                recordId: recordToUpdate._id,
-                checkOutTime: recordToUpdate.checkOut?.timestamp, // Send checkout time
+            io.to(room).emit('attendanceUpdate', {
+                type: 'UPDATE', studentId: populatedRecord.student, status: populatedRecord.status,
+                recordId: populatedRecord._id,
+                checkInTime: populatedRecord.checkIn?.timestamp,
+                checkOutTime: populatedRecord.checkOut?.timestamp,
+                subjectName: populatedRecord.subject?.name,
+                professorName: `${populatedRecord.professor?.firstName} ${populatedRecord.professor?.lastName}`,
             });
         }
 
-        res.status(200).json({ message: "Check-out successful.", record: recordToUpdate });
+        res.status(200).json({
+            message: `Check-out successful. Attendance marked as ${populatedRecord.status}.`,
+            record: populatedRecord
+        });
 
     } catch (error) {
         console.error("Manual Check-Out Error:", error);
-        res.status(500).json({ message: "Server error during check-out." });
+        res.status(500).json({ message: "Server error during check-out.", error: error.message });
     }
 };
 
@@ -407,6 +351,44 @@ exports.updateAttendanceStatus = async (req, res) => {
 };
 
 
+// --- Get student's current session status (NEW Endpoint) ---
+exports.getStudentCurrentSessionStatus = async (req, res) => {
+    const studentId = req.user._id;
+    const { subjectId, classDateStr, scheduledStartTime, term } = req.query;
+
+    if (!subjectId || !classDateStr || !scheduledStartTime || !term) {
+        return res.status(400).json({ message: "Missing required query parameters (subjectId, classDateStr, scheduledStartTime, term)." });
+    }
+    if (!mongoose.Types.ObjectId.isValid(subjectId)) {
+         return res.status(400).json({ message: "Invalid subjectId format." });
+    }
+
+    try {
+        const classDateObject = new Date(classDateStr); // Expects YYYY-MM-DD from client
+        classDateObject.setUTCHours(0, 0, 0, 0);
+
+        const record = await AttendanceRecord.findOne({
+            student: studentId,
+            subject: subjectId,
+            classDate: classDateObject,
+            scheduledStartTime: scheduledStartTime,
+            term: term
+        })
+        .populate(populateRecordFields) // Use the helper
+        .sort({ createdAt: -1 }); // Get the most recent if somehow multiple exist
+
+        if (!record) {
+            // No record found, means not checked-in yet for this specific session
+            return res.status(200).json(null);
+        }
+        res.status(200).json(record); // Send the found record (or null)
+    } catch (error) {
+        console.error("Get Current Session Status Error:", error);
+        res.status(500).json({ message: "Server error fetching current session status.", error: error.message });
+    }
+};
+
+
 
 /**
  * @desc    Get attendance history for the logged-in student
@@ -415,60 +397,36 @@ exports.updateAttendanceStatus = async (req, res) => {
  */
 exports.getStudentAttendanceHistory = async (req, res) => {
     const studentId = req.user._id;
-    const { subjectId, term, fromDate, toDate, page = 1, limit = 20 } = req.query;
+    const { subjectId, term, fromDate, toDate, page = 1, limit = 10 } = req.query; // Default limit to 10
 
     const filter = { student: studentId };
-    if (subjectId && mongoose.Types.ObjectId.isValid(subjectId)) {
-        filter.subject = subjectId;
-    }
-    if (term) {
-        filter.term = term;
-    }
+    if (subjectId && mongoose.Types.ObjectId.isValid(subjectId)) filter.subject = subjectId;
+    if (term) filter.term = term;
     if (fromDate || toDate) {
         filter.classDate = {};
-        if (fromDate) filter.classDate.$gte = new Date(fromDate); // Assumes YYYY-MM-DD
+        if (fromDate) filter.classDate.$gte = new Date(fromDate);
         if (toDate) filter.classDate.$lte = new Date(toDate);
     }
 
     try {
-        const options = {
-            page: parseInt(page, 10),
-            limit: parseInt(limit, 10),
-            sort: { classDate: -1, scheduledStartTime: -1 }, // Sort by date desc, then time
-            populate: [ // Populate details
-                { path: 'subject', select: 'subjectCode name' },
-                { path: 'professor', select: 'firstName lastName' },
-                { path: 'location', select: 'name building' }
-            ],
-            select: '-checkIn.detectedBSSIDs -checkIn.deviceReportedId -checkOut', // Exclude bulky/sensitive validation details
-            lean: true // Use lean for faster read-only results
-        };
-
-        // Use mongoose-paginate-v2 if installed, otherwise manual skip/limit
-        // Manual pagination example:
-        const skip = (options.page - 1) * options.limit;
+        const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
         const records = await AttendanceRecord.find(filter)
-            .sort(options.sort)
+            .sort({ classDate: -1, scheduledStartTime: -1 })
             .skip(skip)
-            .limit(options.limit)
-            .populate(options.populate)
-            .select(options.select)
+            .limit(parseInt(limit, 10))
+            .populate(populateRecordFields) // Use the helper for consistency
+            .select('-checkIn.detectedBSSIDs -checkIn.deviceReportedId -checkOut.detectedBSSIDs -checkOut.deviceReportedId') // Be more specific
             .lean();
 
         const totalRecords = await AttendanceRecord.countDocuments(filter);
 
         res.status(200).json({
-            docs: records,
-            totalDocs: totalRecords,
-            limit: options.limit,
-            page: options.page,
-            totalPages: Math.ceil(totalRecords / options.limit),
-            // hasPrevPage, hasNextPage, etc. can be calculated
+            docs: records, totalDocs: totalRecords, limit: parseInt(limit, 10),
+            page: parseInt(page, 10), totalPages: Math.ceil(totalRecords / parseInt(limit, 10)),
         });
-
     } catch (error) {
         console.error("Get Student History Error:", error);
-        res.status(500).json({ message: "Server error fetching attendance history." });
+        res.status(500).json({ message: "Server error fetching attendance history.", error: error.message });
     }
 };
 
@@ -518,11 +476,11 @@ exports.getStudentAttendanceSummary = async (req, res) => {
             {
                 $unwind: "$subjectInfo"
             },
-             // 5. TODO: Lookup total scheduled classes for this subject in this term from Timetable
-             // This part is complex as it requires querying Timetable based on student's branch/sem/section
-             // For a hackathon, maybe simplify and use `totalClassesMarked` as the denominator?
-             // Or assume a fixed number of classes per subject if timetables aren't fully queryable yet.
-             // Let's use totalClassesMarked for now as a proxy total.
+            // 5. TODO: Lookup total scheduled classes for this subject in this term from Timetable
+            // This part is complex as it requires querying Timetable based on student's branch/sem/section
+            // For a hackathon, maybe simplify and use `totalClassesMarked` as the denominator?
+            // Or assume a fixed number of classes per subject if timetables aren't fully queryable yet.
+            // Let's use totalClassesMarked for now as a proxy total.
             // 6. Project the final output shape
             {
                 $project: {
@@ -562,31 +520,31 @@ exports.getStudentAttendanceSummary = async (req, res) => {
  * @access  Private (Professor)
  */
 exports.getProfessorSessionAttendance = async (req, res) => {
-     const professorId = req.user._id;
-     const { subjectId, locationId, classDateStr, scheduledStartTime, term } = req.query;
+    const professorId = req.user._id;
+    const { subjectId, locationId, classDateStr, scheduledStartTime, term } = req.query;
 
-     // --- Validation ---
-     if (!subjectId || !locationId || !classDateStr || !scheduledStartTime || !term) {
-         return res.status(400).json({ message: "Missing required query parameters: subjectId, locationId, classDateStr, scheduledStartTime, term." });
-     }
-     if (!mongoose.Types.ObjectId.isValid(subjectId) || !mongoose.Types.ObjectId.isValid(locationId)) {
-         return res.status(400).json({ message: "Invalid ID format provided." });
-     }
+    // --- Validation ---
+    if (!subjectId || !locationId || !classDateStr || !scheduledStartTime || !term) {
+        return res.status(400).json({ message: "Missing required query parameters: subjectId, locationId, classDateStr, scheduledStartTime, term." });
+    }
+    if (!mongoose.Types.ObjectId.isValid(subjectId) || !mongoose.Types.ObjectId.isValid(locationId)) {
+        return res.status(400).json({ message: "Invalid ID format provided." });
+    }
 
-     try {
-         const classDateObject = new Date(classDateStr);
-         classDateObject.setUTCHours(0, 0, 0, 0);
+    try {
+        const classDateObject = new Date(classDateStr);
+        classDateObject.setUTCHours(0, 0, 0, 0);
 
-         const filter = {
-             professor: professorId, // Ensure it's the correct professor
-             subject: subjectId,
-             location: locationId,
-             classDate: classDateObject,
-             scheduledStartTime: scheduledStartTime,
-             term: term
-         };
+        const filter = {
+            professor: professorId, // Ensure it's the correct professor
+            subject: subjectId,
+            location: locationId,
+            classDate: classDateObject,
+            scheduledStartTime: scheduledStartTime,
+            term: term
+        };
 
-         const sessionAttendance = await AttendanceRecord.find(filter)
+        const sessionAttendance = await AttendanceRecord.find(filter)
             .populate({ path: 'student', select: 'firstName lastName studentId' }) // Get student details
             .select('student status checkIn.timestamp checkOut.timestamp createdAt') // Select relevant fields
             .sort({ 'student.lastName': 1, 'student.firstName': 1 }) // Sort by student name
@@ -595,13 +553,13 @@ exports.getProfessorSessionAttendance = async (req, res) => {
         // TODO: Augment this list with students who are *expected* but have NO record yet (Absent)
         // This requires knowing the enrollment list for the class (e.g., query User based on branch/sem/section matching the timetable entry)
 
-         res.status(200).json(sessionAttendance);
+        res.status(200).json(sessionAttendance);
 
-     } catch (error) {
-         console.error("Get Professor Session Attendance Error:", error);
-         res.status(500).json({ message: "Server error fetching session attendance." });
-     }
- };
+    } catch (error) {
+        console.error("Get Professor Session Attendance Error:", error);
+        res.status(500).json({ message: "Server error fetching session attendance." });
+    }
+};
 
 
 /**
@@ -614,55 +572,42 @@ exports.updateAttendanceStatus = async (req, res) => {
     const { newStatus, reason } = req.body;
     const userId = req.user._id;
     const userRole = req.user.role;
+    const io = req.io;
 
-    // --- Validation ---
-    if (!mongoose.Types.ObjectId.isValid(recordId)) {
-        return res.status(400).json({ message: "Invalid record ID format." });
-    }
-    const allowedStatuses = ['Present', 'Absent', 'Late', 'Excused']; // Define modifiable statuses
-    if (!newStatus || !allowedStatuses.includes(newStatus)) {
-        return res.status(400).json({ message: `Invalid status. Must be one of: ${allowedStatuses.join(', ')}.` });
-    }
+    if (!mongoose.Types.ObjectId.isValid(recordId)) { /* ... */ }
+    const allowedStatuses = ['Present', 'Absent', 'Late', 'Excused'];
+    if (!newStatus || !allowedStatuses.includes(newStatus)) { /* ... */ }
 
     try {
         const record = await AttendanceRecord.findById(recordId);
-        if (!record) {
-            return res.status(404).json({ message: "Attendance record not found." });
-        }
+        if (!record) return res.status(404).json({ message: "Attendance record not found." });
 
-        // --- Authorization Check ---
-        // Allow if user is admin OR if user is the professor listed on the record
         if (userRole !== 'admin' && !record.professor.equals(userId)) {
-             return res.status(403).json({ message: "You are not authorized to modify this attendance record." });
+             return res.status(403).json({ message: "You are not authorized to modify this record." });
         }
 
-        // --- Update Record ---
+        const oldStatus = record.status;
         record.status = newStatus;
-        if (reason) {
-            record.adminOverrideReason = `Changed by ${userRole} (${req.user.email}) on ${new Date().toISOString()}: ${reason}`;
-        } else {
-             record.adminOverrideReason = `Status changed to ${newStatus} by ${userRole} (${req.user.email}) on ${new Date().toISOString()}.`;
-        }
-
-        // Clear check-in/out data if marking absent? (Policy decision)
-        // if (newStatus === 'Absent') {
-        //    record.checkIn = undefined;
-        //    record.checkOut = undefined;
-        // }
-
+        record.adminOverrideReason = reason ? `Changed by ${userRole} (${req.user.email}) on ${new Date().toISOString()}: ${reason}` : `Status changed to ${newStatus} by ${userRole} (${req.user.email}) on ${new Date().toISOString()}.`;
         await record.save();
 
-         // --- Socket.IO Emission (Placeholder) ---
-         // const classDateStr = record.classDate.toISOString().split('T')[0];
-         // const room = `${record.professor}-${record.subject}-${classDateStr}-${record.scheduledStartTime}`;
-         // if (req.io) req.io.to(room).emit('attendanceUpdate', { studentId: record.student, status: newStatus, record: record });
+        const populatedRecord = await AttendanceRecord.findById(record._id).populate(populateRecordFields);
 
-
-        res.status(200).json({ message: `Attendance status updated to ${newStatus}.`, record });
-
+        if (io && oldStatus !== newStatus) { // Only emit if status actually changed
+            const classDateObjectForRoom = populatedRecord.classDate;
+            const formattedDate = classDateObjectForRoom.toISOString().split('T')[0];
+            const room = `session-${populatedRecord.professor._id}-${populatedRecord.subject._id}-${formattedDate}-${populatedRecord.scheduledStartTime}`;
+            io.to(room).emit('attendanceUpdate', {
+                type: 'STATUS_CHANGE', studentId: populatedRecord.student, status: populatedRecord.status,
+                recordId: populatedRecord._id, updatedBy: userRole,
+                 subjectName: populatedRecord.subject?.name,
+                 professorName: `${populatedRecord.professor?.firstName} ${populatedRecord.professor?.lastName}`,
+            });
+        }
+        res.status(200).json({ message: `Attendance status updated to ${newStatus}.`, record: populatedRecord });
     } catch (error) {
         console.error("Update Attendance Status Error:", error);
-        res.status(500).json({ message: "Server error updating attendance status." });
+        res.status(500).json({ message: "Server error updating attendance status.", error: error.message });
     }
 };
 
@@ -682,36 +627,36 @@ exports.getAdminAnalytics = async (req, res) => {
     // - List of students below a certain threshold
 
     try {
-         // Example: Count total present vs total records in a term
-         const { term } = req.query;
-         if (!term) return res.status(400).json({ message: "Term is required for analytics." });
+        // Example: Count total present vs total records in a term
+        const { term } = req.query;
+        if (!term) return res.status(400).json({ message: "Term is required for analytics." });
 
-         const pipeline = [
-             { $match: { term: term, status: { $in: ['Present', 'Late', 'Absent'] } } },
-             {
-                 $group: {
-                     _id: null, // Group all together
-                     presentCount: { $sum: { $cond: [{ $in: ["$status", ['Present', 'Late']] }, 1, 0] } },
-                     totalRecords: { $sum: 1 }
-                 }
-             },
-             {
-                 $project: {
-                     _id: 0,
-                     term: term,
-                     presentCount: 1,
-                     totalRecords: 1,
-                     overallPercentage: {
-                         $cond: [
-                             { $eq: ["$totalRecords", 0] },
-                             0,
-                             { $round: [{ $multiply: [{ $divide: ["$presentCount", "$totalRecords"] }, 100] }, 1] } // Percentage with 1 decimal place
-                         ]
-                     }
-                 }
-             }
-         ];
-         const analytics = await AttendanceRecord.aggregate(pipeline);
+        const pipeline = [
+            { $match: { term: term, status: { $in: ['Present', 'Late', 'Absent'] } } },
+            {
+                $group: {
+                    _id: null, // Group all together
+                    presentCount: { $sum: { $cond: [{ $in: ["$status", ['Present', 'Late']] }, 1, 0] } },
+                    totalRecords: { $sum: 1 }
+                }
+            },
+            {
+                $project: {
+                    _id: 0,
+                    term: term,
+                    presentCount: 1,
+                    totalRecords: 1,
+                    overallPercentage: {
+                        $cond: [
+                            { $eq: ["$totalRecords", 0] },
+                            0,
+                            { $round: [{ $multiply: [{ $divide: ["$presentCount", "$totalRecords"] }, 100] }, 1] } // Percentage with 1 decimal place
+                        ]
+                    }
+                }
+            }
+        ];
+        const analytics = await AttendanceRecord.aggregate(pipeline);
 
         res.status(200).json(analytics.length > 0 ? analytics[0] : { term: term, presentCount: 0, totalRecords: 0, overallPercentage: 0 });
 
