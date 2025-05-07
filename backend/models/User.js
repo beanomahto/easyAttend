@@ -44,6 +44,15 @@ const userSchema = new mongoose.Schema(
     facultyId: { type: String, unique: true, sparse: true, trim: true },
     department: { type: String, trim: true },
 
+     // *** Device Binding Field ***
+     boundDeviceId: {
+      type: String,
+      unique: true, // Important: Ensures one device ID isn't linked to multiple accounts
+      sparse: true, // Allows multiple users to NOT have a device ID (null)
+      select: false // Prevent sending it back in normal user queries
+  },
+
+
     // --- Admin might not need specific fields beyond role ---
 
     registeredAt: { type: Date, default: Date.now },
