@@ -11,11 +11,14 @@ import SubjectListPage from "../pages/Subjects/SubjectListPage";
 import SubjectCreatePage from "../pages/Subjects/SubjectCreatePage";
 import LocationListPage from "../pages/Locations/LocationListPage";
 import LocationCreatePage from "../pages/Locations/LocationCreatePage";
+import TimetableListPage from "../pages/Timetables/TimetableListPage";
 import TimetableUpsertPage from "../pages/Timetables/TimetableUpsertPage"; // Using Upsert page directly
 import NotFoundPage from "../pages/NotFoundPage";
 import UnauthorizedPage from "../pages/UnauthorizedPage";
 import ProfessorListPage from "../pages/Professors/ProfessorListPage";
 import ProfessorCreatePage from "../pages/Professors/ProfessorCreatePage";
+
+import StudentListPage from "../pages/Students/StudentListPage";
 
 // Route Protection
 import ProtectedRoute from "../components/layouts/ProtectedRoute";
@@ -53,12 +56,15 @@ const AppRoutes = () => {
           <Route path="/locations/create" element={<LocationCreatePage />} />
           {/* Add location edit route later */}
           {/* For Timetables, going directly to Upsert/Manage might be practical */}
-          <Route path="/timetables" element={<TimetableUpsertPage />} />
+          <Route path="/timetables" element={<TimetableListPage />} />
+          <Route path="/timetables/create" element={<TimetableUpsertPage />} />
+          <Route path="/timetables/edit" element={<TimetableUpsertPage />} />
           {/* Optionally add a Timetable List page later if needed */}
           {/* <Route path="/timetables/list" element={<TimetableListPage />} /> */}
           <Route path="/professors" element={<ProfessorListPage />} />
           <Route path="/professors/create" element={<ProfessorCreatePage />} />
           {/* Add other admin routes here (User Management, etc.) */}
+          <Route path="/students" element={<StudentListPage />} />
         </Route>{" "}
         {/* End AdminLayout */}
       </Route>{" "}

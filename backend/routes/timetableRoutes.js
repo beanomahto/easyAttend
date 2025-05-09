@@ -29,4 +29,15 @@ router.get(
 
 // TODO: Add routes for GET / (all), GET /:id, DELETE /:id (Admin only)
 
+
+
+router.get(
+  "/",
+  protect,
+  restrictTo("admin"),
+  timetableController.getAllTimetables
+);
+
+
 module.exports = router;
+
