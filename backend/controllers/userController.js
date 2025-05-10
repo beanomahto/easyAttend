@@ -38,33 +38,135 @@ const generateToken = require("../utils/generateToken"); // Adjust path if neces
 // === USER MANAGEMENT ===
 
 // Get users, optionally filtering by role
+// exports.getAllUsers = async (req, res) => {
+//   try {
+//     const filter = {};
+//     // Allow filtering by role via query parameter (e.g., /api/users?role=professor)
+//     if (req.query.role) {
+//       // Validate the role query parameter if necessary
+//       if (!["student", "professor", "admin"].includes(req.query.role)) {
+//         return res
+//           .status(400)
+//           .json({ message: "Invalid role specified for filtering." });
+//       }
+//       filter.role = req.query.role;
+//     }
+
+//     // Select only necessary fields, especially excluding password!
+//     const users = await User.find(filter)
+//       .select(
+//         "firstName lastName email role studentId facultyId department branch currentSemester section isActive _id"
+//       )
+//       .sort({ lastName: 1, firstName: 1 }); // Sort for better UI presentation
+
+//     res.status(200).json(users);
+//   } catch (err) {
+//     console.error("Get Users Error:", err);
+//     res.status(500).json({ error: "Failed to fetch users" });
+//   }
+// };
+
 exports.getAllUsers = async (req, res) => {
   try {
+    const { role, currentSemester, branch, _distinct /* any other params */ } =
+      req.query;
     const filter = {};
-    // Allow filtering by role via query parameter (e.g., /api/users?role=professor)
-    if (req.query.role) {
-      // Validate the role query parameter if necessary
-      if (!["student", "professor", "admin"].includes(req.query.role)) {
+
+    if (role) {
+      if (!["student", "professor", "admin"].includes(role)) {
         return res
           .status(400)
           .json({ message: "Invalid role specified for filtering." });
       }
-      filter.role = req.query.role;
+      filter.role = role;
     }
 
-    // Select only necessary fields, especially excluding password!
+    // --- BEGIN ADDED FILTERING LOGIC ---
+    if (currentSemester) {
+      // Add validation if necessary (e.g., is it a number?)
+      // Assuming currentSemester is stored as a Number in your User model
+      const semesterNumber = parseInt(currentSemester, 10);
+      if (!isNaN(semesterNumber)) {
+        filter.currentSemester = semesterNumber;
+      } else {
+        // Optional: return an error or ignore if semester is not a valid number
+        console.warn(
+          `Invalid currentSemester query parameter: ${currentSemester}`
+        );
+      }
+    }
+
+    if (branch) {
+      // Add validation if necessary (e.g., is it a non-empty string?)
+      filter.branch = branch;
+    }
+    // --- END ADDED FILTERING LOGIC ---
+
+    // --- BEGIN HANDLING _distinct FOR DROPDOWNS (if not using dedicated endpoints) ---
+    if (_distinct && filter.role === "student") {
+      if (_distinct === "currentSemester") {
+        // If currentSemester filter is also present, distinct should respect it.
+        // However, for general semester list, we usually don't filter by a specific semester.
+        // So, for distinct semesters, the `filter` passed to distinct should typically only be `{ role: 'student' }`
+        const distinctSemesters = await User.distinct("currentSemester", {
+          role: "student",
+        }).lean(); // .lean() for plain JS objects
+        // Filter out null/undefined and sort
+        const sortedSemesters = distinctSemesters
+          .filter((s) => s != null)
+          .sort((a, b) => a - b);
+        return res.status(200).json(sortedSemesters); // Send back a simple array
+      }
+      if (_distinct === "branch") {
+        // For distinct branches, we expect currentSemester to be in the filter
+        const distinctBranches = await User.distinct("branch", filter).lean();
+        const sortedBranches = distinctBranches.filter((b) => b != null).sort();
+        return res.status(200).json(sortedBranches); // Send back a simple array
+      }
+    }
+    // --- END HANDLING _distinct ---
+
+    console.log("Executing User.find with filter:", filter); // Good for debugging
+
     const users = await User.find(filter)
       .select(
-        "firstName lastName email role studentId facultyId department branch currentSemester section isActive _id"
+        "firstName lastName email role studentId facultyId department branch currentSemester section isActive _id createdAt" // Added createdAt for 'Registered' column
       )
-      .sort({ lastName: 1, firstName: 1 }); // Sort for better UI presentation
+      .sort({ lastName: 1, firstName: 1 });
 
-    res.status(200).json(users);
+    // Important: Check your frontend's expectation for the response structure.
+    // If your frontend (e.g., in StudentListPage.js, `setStudents(response.data.data || response.data || [])`)
+    // sometimes expects `response.data.data`, then you should wrap the users array.
+    // For consistency, let's assume it might expect a `data` property for lists.
+    res.status(200).json({ data: users }); // Sending as { data: [...] }
+    // If you always send a direct array, change to res.status(200).json(users);
+    // and update frontend: setStudents(response.data || [])
   } catch (err) {
     console.error("Get Users Error:", err);
-    res.status(500).json({ error: "Failed to fetch users" });
+    res
+      .status(500)
+      .json({ message: "Failed to fetch users", error: err.message }); // Send error message
   }
 };
+
+// ...
+
+// The following two functions are NOT standard controller actions that would be directly hit by a route.
+// They were in your userApi.js as client-side helpers.
+// If you want to use the _distinct approach, the logic is now inside getAllUsers.
+// If you want dedicated endpoints, you'd create new controller functions and routes.
+
+// exports.getStudentSemesters = async () => { // This is not a controller function for a route
+//   // Logic for this is now handled by _distinct='currentSemester' in getAllUsers
+//   // Or, if you create a dedicated route /api/users/students/semesters,
+//   // you'd have a controller function like:
+//   // exports.fetchStudentSemesters = async (req, res) => { ... User.distinct logic ... }
+// };
+
+// exports.getStudentBranchesBySemester = async (semester) => { // Not a controller function
+//   // Logic for this is now handled by _distinct='branch' and currentSemester filter in getAllUsers
+//   // Or, a dedicated route /api/users/students/branches?semester=X
+// };
 
 // TODO: Add controllers for getUserById, updateUser, deleteUser (Admin protected)
 
@@ -124,6 +226,39 @@ const handleRegistration = async (
 
     const newUser = new User(newUserObject);
     await newUser.save(); // Password hashing happens via pre-save hook
+
+    // --- BEGIN WebSocket Emission ---
+    if (req.io) {
+      // Check if io is available
+      try {
+        const statsUpdate = {
+          type: newUser.role === "student" ? "NEW_STUDENT" : "NEW_PROFESSOR",
+          message: `${newUser.firstName} ${newUser.lastName} (${newUser.role}) just registered.`,
+          time: newUser.createdAt,
+        };
+        req.io.emit("dashboardUpdate", statsUpdate);
+
+        // Optionally, you can also emit updated counts directly
+        if (newUser.role === "student") {
+          const totalStudents = await User.countDocuments({ role: "student" });
+          req.io.emit("statsCountUpdate", {
+            entity: "students",
+            count: totalStudents,
+          });
+        } else if (newUser.role === "professor") {
+          const totalProfessors = await User.countDocuments({
+            role: "professor",
+          });
+          req.io.emit("statsCountUpdate", {
+            entity: "professors",
+            count: totalProfessors,
+          });
+        }
+      } catch (emitError) {
+        console.error("Error emitting WebSocket dashboard update:", emitError);
+      }
+    }
+    // --- END WebSocket Emission ---
 
     // Generate Token - Requires generateToken utility
     const token = generateToken(newUser._id, newUser.role);
@@ -374,4 +509,28 @@ exports.getAllProfessorList = async (req, res) => {
     console.error("Get professor Error:", err);
     res.status(500).json({ error: "Failed to fetch professor list" });
   }
+};
+
+exports.getAllStudentList = async (req, res) => {
+  try {
+    const studentList = await User.find({ role: "student" }).sort({
+      name: 1,
+    }); // Sort by name
+    res.status(200).json(studentList);
+  } catch (err) {
+    console.error("Get student Error:", err);
+    res.status(500).json({ error: "Failed to fetch student list" });
+  }
+};
+
+exports.getStudentSemesters = async () => {
+  return getUsers({ role: "student", _distinct: "currentSemester" });
+};
+
+exports.getStudentBranchesBySemester = async (semester) => {
+  return getUsers({
+    role: "student",
+    currentSemester: semester,
+    _distinct: "branch",
+  });
 };

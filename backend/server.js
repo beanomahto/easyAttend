@@ -19,6 +19,7 @@ const timetableRoutes = require("./routes/timetableRoutes");
 const userRoutes = require("./routes/userRoutes");
 const attendanceRoutes = require("./routes/attendanceRoutes");
 const professorRoutes = require("./routes/professorRoutes");
+const dashboardRoutes = require("./routes/dashboardRoutes");
 // Add other routes like attendanceRoutes later
 
 const app = express();
@@ -53,6 +54,7 @@ app.use("/api/timetables", timetableRoutes);
 app.use("/api/users", userRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/professors", professorRoutes);
+app.use("/api/dashboard", dashboardRoutes);
 // Mount other routes here...
 
 // --- Socket.IO Setup (Example - requires implementation) ---

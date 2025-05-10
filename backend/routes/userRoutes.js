@@ -20,4 +20,6 @@ router.post("/login/student", userController.loginStudent);
 router.post("/register/professor", userController.registerProfessor);
 router.post("/login/professor", userController.loginProfessor);
 
+router.get("/students", protect, userController.getAllStudentList);
+
 module.exports = router;
