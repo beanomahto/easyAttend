@@ -386,6 +386,10 @@ import EditIcon from "@mui/icons-material/Edit";
 import { getTimetables } from "../../api/timetableApi"; // Adjust path
 import LoadingSpinner from "../../components/common/LoadingSpinner"; // Adjust path
 
+// src/pages/Timetables/TimetableListPage.js
+
+// ... (imports remain the same) ...
+
 const daysOrder = [
   "Monday",
   "Tuesday",
@@ -400,13 +404,11 @@ const TimetableListPage = () => {
   const navigate = useNavigate();
   const [allTimetables, setAllTimetables] = useState([]);
 
-  // Filters
   const [selectedTerm, setSelectedTerm] = useState("");
   const [selectedBranch, setSelectedBranch] = useState("");
   const [selectedSemester, setSelectedSemester] = useState("");
   const [selectedSection, setSelectedSection] = useState("");
 
-  // Derived dropdown options
   const [availableTerms, setAvailableTerms] = useState([]);
   const [availableBranches, setAvailableBranches] = useState([]);
   const [availableSemesters, setAvailableSemesters] = useState([]);
@@ -415,18 +417,12 @@ const TimetableListPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // Fetch all active timetables on mount
   useEffect(() => {
     const fetchAllActiveTimetables = async () => {
       setLoading(true);
       setError(null);
       try {
-        // To display schedule, ensure backend populates deeply enough:
-        const response = await getTimetables({
-          isActive: true,
-          // Add a query param if backend supports deeper population for this view
-          // populate: 'deep' // Example, backend needs to handle this
-        });
+        const response = await getTimetables({ isActive: true });
         setAllTimetables(response.data || []);
       } catch (err) {
         console.error("Failed to fetch timetables:", err);
@@ -442,7 +438,6 @@ const TimetableListPage = () => {
     fetchAllActiveTimetables();
   }, []);
 
-  // Effect to update available terms from allTimetables
   useEffect(() => {
     if (allTimetables.length > 0) {
       const terms = [...new Set(allTimetables.map((tt) => tt.term))].sort(
@@ -454,7 +449,6 @@ const TimetableListPage = () => {
     }
   }, [allTimetables]);
 
-  // Effect to update available branches when term changes
   useEffect(() => {
     if (selectedTerm) {
       const branches = [
@@ -473,7 +467,6 @@ const TimetableListPage = () => {
     setSelectedSection("");
   }, [selectedTerm, allTimetables]);
 
-  // Effect to update available semesters when branch changes
   useEffect(() => {
     if (selectedBranch && selectedTerm) {
       const semesters = [
@@ -493,7 +486,6 @@ const TimetableListPage = () => {
     setSelectedSection("");
   }, [selectedBranch, selectedTerm, allTimetables]);
 
-  // Effect to update available sections when semester changes
   useEffect(() => {
     if (selectedSemester && selectedBranch && selectedTerm) {
       const sections = [
@@ -515,21 +507,15 @@ const TimetableListPage = () => {
     setSelectedSection("");
   }, [selectedSemester, selectedBranch, selectedTerm, allTimetables]);
 
-  // Memoized selected timetable details
   const selectedTimetableDetails = useMemo(() => {
     if (selectedTerm && selectedBranch && selectedSemester && selectedSection) {
-      // Find the timetable
-      const timetable = allTimetables.find(
+      return allTimetables.find(
         (tt) =>
           tt.term === selectedTerm &&
           tt.branch === selectedBranch &&
           tt.semester === parseInt(selectedSemester) &&
           tt.section === selectedSection
       );
-      // IMPORTANT: Ensure weeklySchedule and its slots have populated data.
-      // This might require your backend `getTimetables` to populate deeper.
-      // If not populated, subject, professor, location will just be ObjectIds.
-      return timetable;
     }
     return null;
   }, [
@@ -541,6 +527,9 @@ const TimetableListPage = () => {
   ]);
 
   const handleEdit = (timetable) => {
+    // For navigating to edit, we pass the unique identifiers (term, branch, semester, section)
+    // The TimetableUpsertPage will then need to fetch this specific timetable data if it's to pre-fill.
+    // Or, it can receive the full timetable object via state if preferred, but query params are more robust.
     navigate(
       `/timetables/edit?term=${encodeURIComponent(
         timetable.term
@@ -550,36 +539,50 @@ const TimetableListPage = () => {
     );
   };
 
-  // Helper to render a single time slot
   const renderTimeSlot = (slot) => (
-    <Paper variant="outlined" sx={{ p: 1.5, mb: 1 }}>
+    <Paper variant="outlined" sx={{ p: 1.5, mb: 1, "&:last-child": { mb: 0 } }}>
       <Typography variant="subtitle2" gutterBottom>
         {slot.startTime} - {slot.endTime}
       </Typography>
       <Typography variant="body2">
         <strong>Subject:</strong>{" "}
-        {slot.subject?.name ||
-          slot.subject?.subjectCode ||
-          slot.subject ||
-          "N/A"}
+        {
+          slot.subject?.name ||
+            slot.subject?.subjectCode ||
+            (typeof slot.subject === "string"
+              ? slot.subject.slice(-6) + " (ID)"
+              : "N/A") // Show last 6 chars of ID if not populated
+        }
       </Typography>
       <Typography variant="body2">
         <strong>Professor:</strong>{" "}
         {slot.professor?.firstName
           ? `${slot.professor.firstName} ${slot.professor.lastName}`
-          : slot.professor || "N/A"}
+          : typeof slot.professor === "string"
+          ? slot.professor.slice(-6) + " (ID)"
+          : "N/A"}
       </Typography>
       <Typography variant="body2">
         <strong>Location:</strong>{" "}
         {slot.location?.name
-          ? `${slot.location.name} (${slot.location.building || ""})`
-          : slot.location || "N/A"}
+          ? `${slot.location.name}${
+              slot.location.building ? ` (${slot.location.building})` : ""
+            }`
+          : typeof slot.location === "string"
+          ? slot.location.slice(-6) + " (ID)"
+          : "N/A"}
       </Typography>
     </Paper>
   );
 
+  // ... (rest of the TimetableListPage component remains the same) ...
+  // Make sure to include the Card, CardContent, Grid, TableContainer, Table, etc. from your provided code.
+  // The change is primarily in the backend and how renderTimeSlot handles potentially unpopulated data slightly more informatively.
+
   return (
-    <Container maxWidth="lg">
+    <Container maxWidth="xl">
+      {" "}
+      {/* Changed to xl for wider schedule display */}
       <Box
         sx={{
           display: "flex",
@@ -601,14 +604,12 @@ const TimetableListPage = () => {
           Add Timetable
         </Button>
       </Box>
-
       {loading && <LoadingSpinner />}
       {error && (
         <Alert severity="error" sx={{ mb: 2 }}>
           {error}
         </Alert>
       )}
-
       {!loading && !error && (
         <Paper elevation={3} sx={{ p: 3, mb: 3 }}>
           {allTimetables.length === 0 ? (
@@ -617,7 +618,6 @@ const TimetableListPage = () => {
             </Typography>
           ) : (
             <Grid container spacing={2} alignItems="flex-start">
-              {/* Term Dropdown */}
               <Grid item xs={12} sm={6} md={3}>
                 <FormControl fullWidth>
                   <InputLabel id="term-select-label">Select Term</InputLabel>
@@ -639,7 +639,6 @@ const TimetableListPage = () => {
                 </FormControl>
               </Grid>
 
-              {/* Branch Dropdown */}
               <Grid item xs={12} sm={6} md={3}>
                 <FormControl
                   fullWidth
@@ -666,7 +665,6 @@ const TimetableListPage = () => {
                 </FormControl>
               </Grid>
 
-              {/* Semester Dropdown */}
               <Grid item xs={12} sm={6} md={3}>
                 <FormControl
                   fullWidth
@@ -693,7 +691,6 @@ const TimetableListPage = () => {
                 </FormControl>
               </Grid>
 
-              {/* Section Dropdown */}
               <Grid item xs={12} sm={6} md={3}>
                 <FormControl
                   fullWidth
@@ -723,7 +720,6 @@ const TimetableListPage = () => {
           )}
         </Paper>
       )}
-
       {selectedTimetableDetails ? (
         <Card variant="outlined" sx={{ mt: 2 }}>
           <CardContent>
@@ -753,59 +749,60 @@ const TimetableListPage = () => {
             </Typography>
             <Divider sx={{ my: 2 }} />
 
-            {/* Weekly Schedule Display */}
-            <Typography variant="h6" gutterBottom sx={{ mt: 2 }}>
+            <Typography variant="h6" gutterBottom sx={{ mt: 2, mb: 1.5 }}>
               Weekly Schedule
             </Typography>
             {selectedTimetableDetails.weeklySchedule &&
-            Object.keys(selectedTimetableDetails.weeklySchedule).length > 0 ? (
+            Object.keys(selectedTimetableDetails.weeklySchedule).some(
+              (day) => selectedTimetableDetails.weeklySchedule[day]?.length > 0
+            ) ? (
               <Grid container spacing={2}>
                 {daysOrder.map((day) => {
                   const daySchedule =
                     selectedTimetableDetails.weeklySchedule[day];
                   if (daySchedule && daySchedule.length > 0) {
-                    // Sort slots by start time for consistent display
                     const sortedDaySchedule = [...daySchedule].sort((a, b) =>
                       a.startTime.localeCompare(b.startTime)
                     );
                     return (
-                      <Grid item xs={12} md={6} lg={4} key={day}>
-                        {" "}
-                        {/* Adjust grid sizing as needed */}
-                        <Paper elevation={2} sx={{ p: 2, height: "100%" }}>
+                      <Grid item xs={12} sm={6} md={4} lg={3} key={day}>
+                        <Paper
+                          elevation={1}
+                          sx={{
+                            p: 2,
+                            height: "100%",
+                            display: "flex",
+                            flexDirection: "column",
+                          }}
+                        >
                           <Typography
                             variant="subtitle1"
+                            component="div"
                             gutterBottom
                             sx={{
                               fontWeight: "bold",
-                              borderBottom: "1px solid #eee",
+                              borderBottom: "1px solid #ddd",
                               pb: 1,
-                              mb: 1,
+                              mb: 1.5,
+                              textAlign: "center",
                             }}
                           >
                             {day}
                           </Typography>
-                          {sortedDaySchedule.map((slot, index) => (
-                            <Box
-                              key={index}
-                              mb={
-                                index < sortedDaySchedule.length - 1 ? 1.5 : 0
-                              }
-                            >
-                              {renderTimeSlot(slot)}
-                            </Box>
-                          ))}
+                          <Box sx={{ flexGrow: 1 }}>
+                            {sortedDaySchedule.map((slot, index) =>
+                              renderTimeSlot(slot)
+                            )}
+                          </Box>
                         </Paper>
                       </Grid>
                     );
                   }
-                  return null; // Or render an empty state for days with no classes
+                  return null;
                 })}
               </Grid>
             ) : (
-              <Typography>
-                No weekly schedule data available for this timetable.
-              </Typography>
+              <Typography>No classes scheduled in this timetable.</Typography>
             )}
 
             <Divider sx={{ my: 3 }} />
@@ -818,7 +815,13 @@ const TimetableListPage = () => {
               {new Date(selectedTimetableDetails.updatedAt).toLocaleString()}
             </Typography>
           </CardContent>
-          <CardActions sx={{ justifyContent: "flex-end", p: 2 }}>
+          <CardActions
+            sx={{
+              justifyContent: "flex-end",
+              p: 2,
+              borderTop: "1px solid #eee",
+            }}
+          >
             <Button
               variant="contained"
               startIcon={<EditIcon />}
