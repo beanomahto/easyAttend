@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const AttendanceRecord = require("../models/AttendanceRecord");
 const User = require("../models/User");
 const Location = require("../models/Location");
+const Timetable = require("../models/Timetable");
 
 // --- Configuration ---
 const CHECKIN_WINDOW_MINUTES = 10; // Allow check-in 10 mins after start
@@ -60,6 +61,13 @@ const populateRecordFields = [
     { path: 'subject', select: 'subjectCode name _id' }, // Make sure _id is selected
     { path: 'professor', select: 'firstName lastName email _id' }, // Make sure _id is selected
     { path: 'location', select: 'name building _id' } // Make sure _id is selected
+];
+
+const populateRecordFieldsForSocket = [
+    { path: 'student', select: 'firstName lastName studentId _id' }, // Ensure studentId (college ID) is selected
+    { path: 'subject', select: 'subjectCode name _id' },
+    { path: 'professor', select: 'firstName lastName email _id' },
+    { path: 'location', select: 'name building _id' }
 ];
 
 
@@ -174,11 +182,19 @@ exports.manualCheckIn = async (req, res) => {
 
         if (io) {
             io.to(room).emit('attendanceUpdate', {
-                type: actionTypeForSocket, studentId: populatedRecord.student,
-                status: populatedRecord.status, recordId: populatedRecord._id,
-                checkInTime: populatedRecord.checkIn?.timestamp,
-                subjectName: populatedRecord.subject?.name,
-                professorName: `${populatedRecord.professor?.firstName} ${populatedRecord.professor?.lastName}`,
+                type: actionTypeForSocket, // 'CREATE' or 'UPDATE'
+                recordId: populatedRecord._id.toString(), // Send recordId
+                student: { // Send student info matching SessionStudentItem.student
+                    id: populatedRecord.student.toString(), // User ObjectId
+                    firstName: populatedRecord.professor?.firstName, // This should be student's name if populated student directly
+                    lastName: populatedRecord.professor?.lastName,  // This should be student's name
+                    studentId: "STUDENT_COLLEGE_ID" // You'll need to fetch the student's college ID to send here
+                },
+                status: populatedRecord.status,
+                checkInTimestamp: populatedRecord.checkIn?.timestamp, // Already there
+                checkOutTimestamp: populatedRecord.checkOut?.timestamp, // Will be null on check-in
+                // subjectName: populatedRecord.subject?.name, // Optional, client might already have this
+                // professorName: `${populatedRecord.professor?.firstName} ${populatedRecord.professor?.lastName}`, // Optional
             });
         }
 
@@ -212,7 +228,7 @@ exports.manualCheckOut = async (req, res) => {
         return res.status(400).json({ message: "Valid attendanceRecordId is required for check-out." });
     }
     if (!currentTimeStr || latitude == null || longitude == null || isMockDetected == null || !deviceId) {
-       return res.status(400).json({ message: "Missing required fields for check-out validation." });
+        return res.status(400).json({ message: "Missing required fields for check-out validation." });
     }
 
     try {
@@ -269,7 +285,7 @@ exports.manualCheckOut = async (req, res) => {
         // --- Update Record ---
         recordToUpdate.checkOut = checkOutData;
         if (recordToUpdate.checkIn) { // Should be true if status was 'Pending'
-             recordToUpdate.status = 'Present';
+            recordToUpdate.status = 'Present';
         } else {
             console.warn(`Check-out performed for record ${recordToUpdate._id} without a prior check-in. Status remains ${recordToUpdate.status}.`);
         }
@@ -286,14 +302,20 @@ exports.manualCheckOut = async (req, res) => {
         const formattedDateForRoom = populatedRecord.classDate.toISOString().split('T')[0];
         const room = `session-${populatedRecord.professor._id}-${populatedRecord.subject._id}-${formattedDateForRoom}-${populatedRecord.scheduledStartTime}`;
 
+        // Inside manualCheckOut, after populating 'populatedRecord'
         if (io) {
             io.to(room).emit('attendanceUpdate', {
-                type: 'UPDATE', studentId: populatedRecord.student, status: populatedRecord.status,
-                recordId: populatedRecord._id,
-                checkInTime: populatedRecord.checkIn?.timestamp,
-                checkOutTime: populatedRecord.checkOut?.timestamp,
-                subjectName: populatedRecord.subject?.name,
-                professorName: `${populatedRecord.professor?.firstName} ${populatedRecord.professor?.lastName}`,
+                type: 'UPDATE',
+                recordId: populatedRecord._id.toString(),
+                student: {
+                    id: populatedRecord.student.toString(),
+                    firstName: populatedRecord.professor?.firstName, // Adjust to send actual student's name
+                    lastName: populatedRecord.professor?.lastName,   // Adjust to send actual student's name
+                    studentId: "STUDENT_COLLEGE_ID" // Fetch student's college ID
+                },
+                status: populatedRecord.status,
+                checkInTimestamp: populatedRecord.checkIn?.timestamp,
+                checkOutTimestamp: populatedRecord.checkOut?.timestamp, // Now available
             });
         }
 
@@ -331,15 +353,25 @@ exports.updateAttendanceStatus = async (req, res) => {
         const room = `session-${record.professor}-${record.subject}-${formattedDate}-${record.scheduledStartTime}`;
 
         // --- Socket.IO Emission ---
-        if (io) {
-            io.to(room).emit('attendanceUpdate', {
-                type: 'UPDATE',
-                studentId: record.student,
-                status: newStatus, // Send the new status
-                recordId: record._id,
-                updatedBy: req.user.role, // Optionally send who updated it
+        // Inside updateAttendanceStatus, after populating 'populatedRecord'
+        if (io && oldStatus !== newStatus) {
+            // ... (room definition)
+            io.to(room).emit('attendanceUpdate', { // Use consistent event name 'attendanceUpdate'
+                type: 'STATUS_CHANGE', // Or more specific like 'PROFESSOR_OVERRIDE'
+                recordId: populatedRecord._id.toString(),
+                student: {
+                    id: populatedRecord.student.toString(),
+                    firstName: populatedRecord.professor?.firstName, // Student's first name
+                    lastName: populatedRecord.professor?.lastName,   // Student's last name
+                    studentId: "STUDENT_COLLEGE_ID" // Student's college ID
+                },
+                status: populatedRecord.status,
+                checkInTimestamp: populatedRecord.checkIn?.timestamp,
+                checkOutTimestamp: populatedRecord.checkOut?.timestamp,
+                updatedBy: userRole,
             });
         }
+
 
 
         res.status(200).json({ message: `Attendance status updated to ${newStatus}.`, record });
@@ -360,7 +392,7 @@ exports.getStudentCurrentSessionStatus = async (req, res) => {
         return res.status(400).json({ message: "Missing required query parameters (subjectId, classDateStr, scheduledStartTime, term)." });
     }
     if (!mongoose.Types.ObjectId.isValid(subjectId)) {
-         return res.status(400).json({ message: "Invalid subjectId format." });
+        return res.status(400).json({ message: "Invalid subjectId format." });
     }
 
     try {
@@ -374,8 +406,8 @@ exports.getStudentCurrentSessionStatus = async (req, res) => {
             scheduledStartTime: scheduledStartTime,
             term: term
         })
-        .populate(populateRecordFields) // Use the helper
-        .sort({ createdAt: -1 }); // Get the most recent if somehow multiple exist
+            .populate(populateRecordFields) // Use the helper
+            .sort({ createdAt: -1 }); // Get the most recent if somehow multiple exist
 
         if (!record) {
             // No record found, means not checked-in yet for this specific session
@@ -535,25 +567,119 @@ exports.getProfessorSessionAttendance = async (req, res) => {
         const classDateObject = new Date(classDateStr);
         classDateObject.setUTCHours(0, 0, 0, 0);
 
-        const filter = {
-            professor: professorId, // Ensure it's the correct professor
+
+        // 1. Find the specific timetable entry to get branch, semester, section
+        //    We need to find which class this session corresponds to in the timetables.
+        //    This query assumes a professor teaches a specific subject at a specific time/location
+        //    in only one branch/sem/section combo for a given term.
+        const dayOfWeek = classDateObject.toLocaleDateString("en-US", { weekday: "long" });
+
+        const timetableEntry = await Timetable.findOne({
+            term: term.toUpperCase(), // Ensure consistent casing
+            isActive: true,
+            [`weeklySchedule.${dayOfWeek}`]: {
+                $elemMatch: {
+                    subject: subjectId,
+                    professor: professorId,
+                    location: locationId,
+                    startTime: scheduledStartTime
+                }
+            }
+        }).select('branch semester section').lean();
+
+        if (!timetableEntry) {
+            console.warn(`No timetable entry found for prof ${professorId}, subj ${subjectId}, loc ${locationId}, time ${scheduledStartTime}, day ${dayOfWeek}, term ${term}`);
+            return res.status(404).json({ message: "Class session details not found in timetable. Cannot determine student enrollment." });
+        }
+
+        const { branch, semester, section } = timetableEntry;
+
+        // 2. Get all students enrolled in that class (branch, semester, section)
+        const enrolledStudents = await User.find({
+            role: 'student',
+            branch: branch, // Use branch from timetable
+            currentSemester: semester, // Use semester from timetable
+            section: section, // Use section from timetable
+            isActive: true
+        }).select('firstName lastName studentId _id').lean(); // studentId here is the User's _id
+
+        if (!enrolledStudents || enrolledStudents.length === 0) {
+            return res.status(200).json([]); // No students enrolled in this class
+        }
+
+        // 3. Get existing attendance records for this specific session for these students
+        const studentIds = enrolledStudents.map(s => s._id);
+        const attendanceRecords = await AttendanceRecord.find({
+            student: { $in: studentIds },
             subject: subjectId,
-            location: locationId,
+            // professor: professorId, // Not strictly needed if filtering by student list from prof's class
+            // location: locationId,   // Not strictly needed
             classDate: classDateObject,
             scheduledStartTime: scheduledStartTime,
-            term: term
-        };
-
-        const sessionAttendance = await AttendanceRecord.find(filter)
-            .populate({ path: 'student', select: 'firstName lastName studentId' }) // Get student details
-            .select('student status checkIn.timestamp checkOut.timestamp createdAt') // Select relevant fields
-            .sort({ 'student.lastName': 1, 'student.firstName': 1 }) // Sort by student name
+            term: term.toUpperCase()
+        })
+            // Populate only the necessary fields from subdocuments for the response
+            .select('student status checkIn.timestamp checkOut.timestamp adminOverrideReason')
             .lean();
 
-        // TODO: Augment this list with students who are *expected* but have NO record yet (Absent)
-        // This requires knowing the enrollment list for the class (e.g., query User based on branch/sem/section matching the timetable entry)
+        // 4. Map records for easier lookup
+        const attendanceMap = new Map();
+        attendanceRecords.forEach(record => {
+            attendanceMap.set(record.student.toString(), record);
+        });
 
-        res.status(200).json(sessionAttendance);
+        // 5. Combine enrolled students with their attendance data
+        const sessionStudentList = enrolledStudents.map(student => {
+            const record = attendanceMap.get(student._id.toString());
+            return {
+                recordId: record ? record._id.toString() : null,
+                student: { // Matches StudentInfoForSession on Android
+                    id: student._id.toString(),
+                    firstName: student.firstName,
+                    lastName: student.lastName,
+                    studentId: student.studentId // This is the college ID (e.g., "S101")
+                },
+                status: record ? record.status : 'Absent', // Default to Absent if no record
+                checkInTimestamp: record && record.checkIn ? record.checkIn.timestamp : null,
+                checkOutTimestamp: record && record.checkOut ? record.checkOut.timestamp : null,
+                adminOverrideReason: record ? record.adminOverrideReason : null
+            };
+        });
+
+
+        // Sort by student name (optional, can also be done on client)
+        sessionStudentList.sort((a, b) => {
+            const nameA = `${a.student.lastName} ${a.student.firstName}`.toLowerCase();
+            const nameB = `${b.student.lastName} ${b.student.firstName}`.toLowerCase();
+            if (nameA < nameB) return -1;
+            if (nameA > nameB) return 1;
+            return 0;
+        });
+
+        res.status(200).json(sessionStudentList);
+
+
+
+
+        // const filter = {
+        //     professor: professorId, // Ensure it's the correct professor
+        //     subject: subjectId,
+        //     location: locationId,
+        //     classDate: classDateObject,
+        //     scheduledStartTime: scheduledStartTime,
+        //     term: term
+        // };
+
+        // const sessionAttendance = await AttendanceRecord.find(filter)
+        //     .populate({ path: 'student', select: 'firstName lastName studentId' }) // Get student details
+        //     .select('student status checkIn.timestamp checkOut.timestamp createdAt') // Select relevant fields
+        //     .sort({ 'student.lastName': 1, 'student.firstName': 1 }) // Sort by student name
+        //     .lean();
+
+        // // TODO: Augment this list with students who are *expected* but have NO record yet (Absent)
+        // // This requires knowing the enrollment list for the class (e.g., query User based on branch/sem/section matching the timetable entry)
+
+        // res.status(200).json(sessionAttendance);
 
     } catch (error) {
         console.error("Get Professor Session Attendance Error:", error);
@@ -583,7 +709,7 @@ exports.updateAttendanceStatus = async (req, res) => {
         if (!record) return res.status(404).json({ message: "Attendance record not found." });
 
         if (userRole !== 'admin' && !record.professor.equals(userId)) {
-             return res.status(403).json({ message: "You are not authorized to modify this record." });
+            return res.status(403).json({ message: "You are not authorized to modify this record." });
         }
 
         const oldStatus = record.status;
@@ -600,8 +726,8 @@ exports.updateAttendanceStatus = async (req, res) => {
             io.to(room).emit('attendanceUpdate', {
                 type: 'STATUS_CHANGE', studentId: populatedRecord.student, status: populatedRecord.status,
                 recordId: populatedRecord._id, updatedBy: userRole,
-                 subjectName: populatedRecord.subject?.name,
-                 professorName: `${populatedRecord.professor?.firstName} ${populatedRecord.professor?.lastName}`,
+                subjectName: populatedRecord.subject?.name,
+                professorName: `${populatedRecord.professor?.firstName} ${populatedRecord.professor?.lastName}`,
             });
         }
         res.status(200).json({ message: `Attendance status updated to ${newStatus}.`, record: populatedRecord });
