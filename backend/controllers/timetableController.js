@@ -544,10 +544,10 @@ exports.getStudentTodaySchedule = async (req, res) => {
     });
     
     const timetable = await Timetable.findOne({
-      branch,
-      semester,
-      section,
-      term: term, 
+      branch: req.user.branch.toUpperCase(), // Use consistent casing
+      semester: req.user.currentSemester,
+      section: req.user.section.toUpperCase(), // Use consistent casing
+      term: req.query.term.toUpperCase(),   // Use consistent casing
       isActive: true,
     })
       .populate({
@@ -560,7 +560,7 @@ exports.getStudentTodaySchedule = async (req, res) => {
       })
       .populate({
         path: `weeklySchedule.${dayOfWeek}.location`,
-        select: "name building _id",
+        select: "name building coordinates radiusMeters _id",
       });
 
     if (!timetable) {
