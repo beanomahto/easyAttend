@@ -392,7 +392,7 @@ const LocationListPage = () => {
             <Grid container spacing={2} alignItems="flex-start">
               <Grid item xs={12} sm={6}>
                 <FormControl fullWidth>
-                  <InputLabel id="building-select-label">
+                  <InputLabel  className="w-" id="building-select-label">
                     Select Building
                   </InputLabel>
                   <Select
