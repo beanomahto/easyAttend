@@ -373,8 +373,6 @@
 //         });
 //     });
 
-    
-
 //     const timetables = await Timetable.find(filter)
 //       .populate("weeklySchedule.Monday.subject", "subjectCode name") // Example of populating if needed for list view
 //       .populate("weeklySchedule.Monday.professor", "firstName lastName") // Rarely needed for list, but shows how
@@ -390,12 +388,11 @@
 //   }
 // };
 
-
 // controllers/timetableController.js
 const Timetable = require("../models/Timetable");
 const mongoose = require("mongoose");
 const User = require("../models/User"); // Need User model for validation checks
-
+const AttendanceRecord = require("../models/AttendanceRecord");
 // Helper (consider moving to a config or util file)
 function getCurrentTerm() {
   const month = new Date().getMonth();
@@ -467,8 +464,20 @@ exports.upsertTimetable = async (req, res) => {
       return res.status(400).json({ message: validationError });
     }
 
-    const filter = { branch, semester: parseInt(semester, 10), section: section.toUpperCase(), term: term.toUpperCase() };
-    const update = { weeklySchedule, isActive, branch, semester: parseInt(semester, 10), section: section.toUpperCase(), term: term.toUpperCase() };
+    const filter = {
+      branch,
+      semester: parseInt(semester, 10),
+      section: section.toUpperCase(),
+      term: term.toUpperCase(),
+    };
+    const update = {
+      weeklySchedule,
+      isActive,
+      branch,
+      semester: parseInt(semester, 10),
+      section: section.toUpperCase(),
+      term: term.toUpperCase(),
+    };
     const options = {
       new: true,
       upsert: true,
@@ -490,19 +499,15 @@ exports.upsertTimetable = async (req, res) => {
       return res.status(400).json({ message: messages.join(". ") });
     }
     if (err.code === 11000) {
-      return res
-        .status(400)
-        .json({
-          message:
-            "A timetable for this Branch, Semester, Section, and Term might already exist (unique index violation).",
-        });
-    }
-    res
-      .status(500)
-      .json({
-        message: "Failed to create or update timetable",
-        error: err.message,
+      return res.status(400).json({
+        message:
+          "A timetable for this Branch, Semester, Section, and Term might already exist (unique index violation).",
       });
+    }
+    res.status(500).json({
+      message: "Failed to create or update timetable",
+      error: err.message,
+    });
   }
 };
 
@@ -514,18 +519,15 @@ exports.getStudentTodaySchedule = async (req, res) => {
         .json({ message: "Access denied. Student role required." });
     }
     const { branch, currentSemester: semester, section } = req.user;
-    const term = req.query.term; 
+    const term = req.query.term;
 
     if (!term) {
       console.warn(
         "[getStudentTodaySchedule] Term query parameter is missing."
       );
-      return res
-        .status(400)
-        .json({
-          message:
-            "Term query parameter is required (e.g., ?term=FALL%202024).",
-        });
+      return res.status(400).json({
+        message: "Term query parameter is required (e.g., ?term=FALL%202024).",
+      });
     }
 
     if (!branch || !semester || !section) {
@@ -542,12 +544,12 @@ exports.getStudentTodaySchedule = async (req, res) => {
     const dayOfWeek = serverNow.toLocaleDateString("en-US", {
       weekday: "long",
     });
-    
+
     const timetable = await Timetable.findOne({
       branch: req.user.branch.toUpperCase(), // Use consistent casing
       semester: req.user.currentSemester,
       section: req.user.section.toUpperCase(), // Use consistent casing
-      term: req.query.term.toUpperCase(),   // Use consistent casing
+      term: req.query.term.toUpperCase(), // Use consistent casing
       isActive: true,
     })
       .populate({
@@ -564,13 +566,13 @@ exports.getStudentTodaySchedule = async (req, res) => {
       });
 
     if (!timetable) {
-      return res.status(200).json([]); 
+      return res.status(200).json([]);
     }
 
-    const todaysSchedule = timetable.weeklySchedule?.[dayOfWeek]; 
+    const todaysSchedule = timetable.weeklySchedule?.[dayOfWeek];
 
     if (!todaysSchedule || todaysSchedule.length === 0) {
-      return res.status(200).json([]); 
+      return res.status(200).json([]);
     }
 
     const todaysScheduleWithTerm = todaysSchedule.map((slot) => {
@@ -578,19 +580,17 @@ exports.getStudentTodaySchedule = async (req, res) => {
         typeof slot.toObject === "function" ? slot.toObject() : { ...slot };
       return {
         ...plainSlot,
-        term: timetable.term, 
+        term: timetable.term,
       };
     });
 
     res.status(200).json(todaysScheduleWithTerm);
   } catch (err) {
     console.error("[getStudentTodaySchedule] Error:", err);
-    res
-      .status(500)
-      .json({
-        message: "Server error fetching student schedule",
-        error: err.message,
-      });
+    res.status(500).json({
+      message: "Server error fetching student schedule",
+      error: err.message,
+    });
   }
 };
 
@@ -602,13 +602,17 @@ exports.getProfessorTodaySchedule = async (req, res) => {
         .json({ message: "Access denied. Professor role required." });
     }
     const professorId = req.user._id;
-    const term = req.query.term || getCurrentTerm(); 
+    const term = req.query.term || getCurrentTerm();
     const dayOfWeek = new Date().toLocaleDateString("en-US", {
       weekday: "long",
     });
-
+    const classDateObject = new Date(); // Today's date
+    classDateObject.setUTCHours(0, 0, 0, 0);
+    console.log(
+      `Fetching professor schedule for ProfID=${professorId}, Term=${term}, Day=${dayOfWeek}, Date: ${classDateObject.toISOString()}`
+    );
     const query = {
-      term: term,
+      term: term.toUpperCase(), // Ensure consistent casing
       isActive: true,
       [`weeklySchedule.${dayOfWeek}.professor`]: professorId,
     };
@@ -625,44 +629,72 @@ exports.getProfessorTodaySchedule = async (req, res) => {
       })
       .populate({
         path: `weeklySchedule.${dayOfWeek}.location`,
-        select: "name building _id",
-      })
-      .lean(); 
+        select: "name building coordinates radiusMeters _id",
+      }) // Populate original location
+      .lean();
 
     let professorClasses = [];
-    timetables.forEach((tt) => {
+    for (const tt of timetables) {
+      // Use for...of for async/await inside loop if needed, though not here
       if (tt.weeklySchedule?.[dayOfWeek]) {
-        tt.weeklySchedule[dayOfWeek].forEach((slot) => {
+        for (const slot of tt.weeklySchedule[dayOfWeek]) {
           if (slot.professor && slot.professor._id.equals(professorId)) {
+            let finalLocation = slot.location; // Start with timetable location
+
+            // *** NEW LOGIC: Check for session-specific location override ***
+            // An AttendanceRecord for this session might have an updated location.
+            // We only care about the *most recent* record if multiple somehow exist (shouldn't for one session).
+            const sessionSpecificRecord = await AttendanceRecord.findOne({
+              professor: professorId,
+              subject: slot.subject._id,
+              classDate: classDateObject,
+              scheduledStartTime: slot.startTime,
+              term: tt.term, // Use term from this timetable entry
+            })
+              .sort({ updatedAt: -1 }) // Get the most recently updated record for this session
+              .populate("location") // Populate the location field of the attendance record
+              .lean();
+
+            if (sessionSpecificRecord && sessionSpecificRecord.location) {
+              // If a record exists and has a location, it might be the override
+              // We need to be careful: if the record's location is the *same* as timetable, no change.
+              // If the professor changed it, the record's location *is* the new one.
+              console.log(
+                `Slot [${slot.subject.name} @ ${slot.startTime}]: Timetable Loc: ${slot.location?.name}, Record Loc: ${sessionSpecificRecord.location?.name}`
+              );
+              finalLocation = sessionSpecificRecord.location; // Use location from the attendance record
+            }
+            // *** END NEW LOGIC ***
+
             professorClasses.push({
               startTime: slot.startTime,
               endTime: slot.endTime,
-              subject: slot.subject, 
-              location: slot.location, 
-              professor: slot.professor, 
+              subject: slot.subject,
+              location: finalLocation, // Use the potentially overridden location
+              professor: slot.professor,
               branch: tt.branch,
               semester: tt.semester,
               section: tt.section,
-              term: tt.term, // Use term from the timetable document itself
+              term: tt.term,
             });
           }
-        });
+        }
       }
-    });
+    }
 
     professorClasses.sort((a, b) => a.startTime.localeCompare(b.startTime));
+    console.log(
+      `Found ${professorClasses.length} classes for professor ${professorId} on ${dayOfWeek}.`
+    );
     res.status(200).json(professorClasses);
   } catch (err) {
     console.error("Get Professor Schedule Error:", err);
-    res
-      .status(500)
-      .json({
-        message: "Server error fetching professor schedule.",
-        error: err.message,
-      });
+    res.status(500).json({
+      message: "Server error fetching professor schedule.",
+      error: err.message,
+    });
   }
 };
-
 
 exports.getAllTimetables = async (req, res) => {
   try {
@@ -675,12 +707,12 @@ exports.getAllTimetables = async (req, res) => {
       const semNum = parseInt(semester, 10);
       if (!isNaN(semNum)) filter.semester = semNum;
     }
-    if (section) filter.section = section.toUpperCase(); 
+    if (section) filter.section = section.toUpperCase();
 
     if (isActive === "true" || isActive === "false") {
       filter.isActive = isActive === "true";
     } else {
-      filter.isActive = true; 
+      filter.isActive = true;
     }
 
     console.log("Fetching timetables with filter:", filter);
@@ -688,7 +720,13 @@ exports.getAllTimetables = async (req, res) => {
     let query = Timetable.find(filter);
 
     const daysToPopulate = [
-      "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+      "Monday",
+      "Tuesday",
+      "Wednesday",
+      "Thursday",
+      "Friday",
+      "Saturday",
+      "Sunday",
     ];
 
     // Chain population for all days and all slot types (subject, professor, location)
@@ -696,23 +734,25 @@ exports.getAllTimetables = async (req, res) => {
       query = query
         .populate({
           path: `weeklySchedule.${day}.subject`,
-          model: 'Subject', // Explicitly provide model name
+          model: "Subject", // Explicitly provide model name
           select: "subjectCode name _id",
         })
         .populate({
           path: `weeklySchedule.${day}.professor`,
-          model: 'User', // Explicitly provide model name
+          model: "User", // Explicitly provide model name
           select: "firstName lastName email facultyId _id", // Added facultyId for completeness
         })
         .populate({
           path: `weeklySchedule.${day}.location`,
-          model: 'Location', // Explicitly provide model name
+          model: "Location", // Explicitly provide model name
           select: "name building _id",
         });
     });
-    
+
     // Add sort and lean to the main query chain, then await it
-    const timetables = await query.sort({ term: -1, branch: 1, semester: 1, section: 1 }).lean();
+    const timetables = await query
+      .sort({ term: -1, branch: 1, semester: 1, section: 1 })
+      .lean();
 
     res.status(200).json(timetables);
   } catch (err) {
