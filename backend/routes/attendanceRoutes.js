@@ -32,6 +32,11 @@ router.get("/student/summary", protect, restrictTo('student'), attendanceControl
 
 // PUT /api/attendance/:recordId/status - Admin/Professor override status
 router.put("/:recordId/status", protect, restrictTo('admin', 'professor'), attendanceController.updateAttendanceStatus);
-
+router.put(
+    "/session/update-location",
+    protect,
+    restrictTo('professor'),
+    attendanceController.updateSessionLocation
+);
 
 module.exports = router;
