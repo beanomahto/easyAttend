@@ -22,12 +22,18 @@ const attendanceRecordSchema = new Schema({
     // Denormalize key Timetable info for easier querying & if timetable changes later
     subject: { type: Schema.Types.ObjectId, ref: 'Subject', required: true, index: true },
     professor: { type: Schema.Types.ObjectId, ref: 'User', required: true },
-    location: { type: Schema.Types.ObjectId, ref: 'Location', required: true },
-    timetableRef: { type: Schema.Types.ObjectId, ref: 'Timetable' }, // Link back if needed
+    // location: { type: Schema.Types.ObjectId, ref: 'Location', required: true },
+    location: { type: Schema.Types.ObjectId, ref: 'Location' },
+    // timetableRef: { type: Schema.Types.ObjectId, ref: 'Timetable' }, // Link back if needed
+    timetableRef: { type: Schema.Types.ObjectId, ref: 'Timetable' , require: true }, // Link back if needed
+
+    activeSessionRef: { type: Schema.Types.ObjectId, ref: 'ActiveClassSession'}, // Optional link
+
     classDate: { type: Date, required: true, index: true }, // Store Date only (midnight UTC)
     scheduledStartTime: { type: String, required: true }, // e.g., "09:00"
     scheduledEndTime: { type: String, required: true }, // e.g., "10:00"
     term: { type: String, required: true, index: true }, // e.g., "FALL 2024"
+
 
     checkIn: { type: attendanceValidationSchema },
     checkOut: { type: attendanceValidationSchema }, // Optional check-out

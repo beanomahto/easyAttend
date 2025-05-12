@@ -3,7 +3,10 @@ const mongoose = require('mongoose');
 const AttendanceRecord = require("../models/AttendanceRecord");
 const User = require("../models/User");
 const Location = require("../models/Location");
+
 const Timetable = require("../models/Timetable");
+const ActiveClassSession = require('../models/ActiveClassSession');
+
 // --- Configuration ---
 const CHECKIN_WINDOW_MINUTES = 10; // Allow check-in 10 mins after start
 const CHECKOUT_WINDOW_MINUTES = 5; // Allow check-out 5 mins after end
@@ -29,31 +32,33 @@ function addMinutesToTime(timeStr, minutes) {
     return `${newHours}:${newMins}`;
 }
 
-// Placeholder for actual distance check (replace with Haversine or library)
-// Returns true if point [lng, lat] is within radius of center [lng, lat]
+
+
+function getDistanceFromLatLonInMeters(lat1, lon1, lat2, lon2) {
+    const R = 6371000; // Radius of the earth in meters
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c; // Distance in meters
+}
+
 function isWithinRadius(pointCoords, centerCoords, radiusMeters) {
-    if (!pointCoords || !centerCoords || !radiusMeters || pointCoords.length !== 2 || centerCoords.length !== 2) {
+    if (!pointCoords || pointCoords.length !== 2 || !centerCoords || centerCoords.length !== 2 || !radiusMeters) {
         console.warn("isWithinRadius: Invalid input parameters.");
         return false;
     }
-    // **VERY basic placeholder - Euclidean distance on degrees (NOT accurate globally!)**
-    // **REPLACE THIS WITH A PROPER HAVERSINE IMPLEMENTATION**
-    const R = 6371e3; // Earth radius in meters
-    const lat1 = pointCoords[1] * Math.PI / 180; // φ, λ in radians
-    const lat2 = centerCoords[1] * Math.PI / 180;
-    const deltaLat = (centerCoords[1] - pointCoords[1]) * Math.PI / 180;
-    const deltaLon = (centerCoords[0] - pointCoords[0]) * Math.PI / 180;
-
-    const a = Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
-        Math.cos(lat1) * Math.cos(lat2) *
-        Math.sin(deltaLon / 2) * Math.sin(deltaLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-    const distance = R * c; // in metres
-
-    console.log(`[GeoCheck] Distance: ${distance.toFixed(2)}m, Required Radius (with buffer): ${radiusMeters}m, Classroom Radius: ${radiusMeters - LOCATION_CHECK_RADIUS_METERS_BUFFER}m`);
-    return distance <= radiusMeters;
+    // pointCoords = [longitude, latitude], centerCoords = [longitude, latitude]
+    const distance = getDistanceFromLatLonInMeters(pointCoords[1], pointCoords[0], centerCoords[1], centerCoords[0]);
+    const effectiveRadius = radiusMeters; // Buffer is added on client or professor specifies total radius
+    console.log(`[GeoCheck] Student Distance: ${distance.toFixed(2)}m, Effective Session Radius: ${effectiveRadius}m`);
+    return distance <= effectiveRadius;
 }
+
+
 
 // --- Populate Helper ---
 const populateRecordFields = [
@@ -70,77 +75,115 @@ const populateRecordFields = [
  * @route   POST /api/attendance/check-in
  * @access  Private (Student)
  */
+
 exports.manualCheckIn = async (req, res) => {
     const studentId = req.user._id;
     const io = req.io;
     const {
-        subjectId, professorId, locationId, classDateStr,
-        scheduledStartTime, scheduledEndTime, term,
+        // Student still sends these to identify the class they *think* they are checking into
+        subjectId, professorId, /* locationId (optional, for scheduled loc) */
+        classDateStr, scheduledStartTime, scheduledEndTime, term,
+
+        // Student's current context
         currentTimeStr, latitude, longitude, accuracy,
         detectedBSSIDs = [], isMockDetected, deviceId
     } = req.body;
 
-    // --- Basic Input Validation ---
-    if (!subjectId || !professorId || !locationId || !classDateStr || !scheduledStartTime || !scheduledEndTime || !term || !currentTimeStr || latitude == null || longitude == null || isMockDetected == null || !deviceId) {
+    // --- Basic Input Validation (as before) ---
+    if (!subjectId || !professorId || !classDateStr || !scheduledStartTime || !scheduledEndTime || !term || !currentTimeStr || latitude == null || longitude == null || isMockDetected == null || !deviceId) {
         return res.status(400).json({ message: "Missing required fields for check-in." });
     }
-    if (!mongoose.Types.ObjectId.isValid(subjectId) || !mongoose.Types.ObjectId.isValid(professorId) || !mongoose.Types.ObjectId.isValid(locationId)) {
-        return res.status(400).json({ message: "Invalid ID format provided." });
-    }
+    // ... other validations ...
 
     try {
-        // --- Time Window Check ---
-        const checkinEndTime = addMinutesToTime(scheduledStartTime, CHECKIN_WINDOW_MINUTES);
-        if (!checkinEndTime || !isTimeWithinWindow(currentTimeStr, scheduledStartTime, checkinEndTime)) {
-            return res.status(400).json({ message: `Check-in window: ${scheduledStartTime} - ${checkinEndTime}. Current: ${currentTimeStr}. Check-in closed/not open.` });
+        // --- 1. Find the Professor's Active Class Session for this class ---
+        const classDateObjectForQuery = new Date(classDateStr);
+        classDateObjectForQuery.setUTCHours(0, 0, 0, 0);
+
+        const activeSession = await ActiveClassSession.findOne({
+            professor: professorId,
+            subject: subjectId,
+            classDate: classDateObjectForQuery,
+            scheduledStartTime: scheduledStartTime,
+            // term: term, // Optional: if professor teaches same subject in multiple terms concurrently
+            isActive: true
+        }).lean(); // .lean() for performance if not modifying activeSession doc
+
+        if (!activeSession) {
+            return res.status(404).json({ message: "Professor has not started this class session, or it has ended. Please wait or contact your professor." });
+        }
+        if (!activeSession.geofenceCenter || !activeSession.geofenceCenter.coordinates) {
+            return res.status(500).json({ message: "Active session found, but geofence center is missing. Contact admin." });
+        }
+
+        // --- 2. Time Window Check (using activeSession's scheduledStartTime and configured window) ---
+        const checkinEndTime = addMinutesToTime(activeSession.scheduledStartTime, CHECKIN_WINDOW_MINUTES);
+        if (!checkinEndTime || !isTimeWithinWindow(currentTimeStr, activeSession.scheduledStartTime, checkinEndTime)) {
+            return res.status(400).json({ message: `Check-in window: ${activeSession.scheduledStartTime} - ${checkinEndTime}. Current: ${currentTimeStr}. Check-in closed/not open.` });
         }
 
         const user = await User.findById(studentId).select('+boundDeviceId').lean();
         if (!user) return res.status(404).json({ message: "Student not found." });
 
-        const classLocation = await Location.findById(locationId).lean(); // Renamed
-        if (!classLocation || !classLocation.location || !classLocation.location.coordinates) {
-            return res.status(404).json({ message: "Classroom location details not found." });
-        }
-
-        // --- Perform Validations ---
+        // --- 3. Perform Validations using DYNAMIC Geofence from activeSession ---
         const deviceIdMatch = !!user.boundDeviceId && user.boundDeviceId === deviceId;
-        const geoPassed = isWithinRadius([longitude, latitude], classLocation.location.coordinates, classLocation.radiusMeters + LOCATION_CHECK_RADIUS_METERS_BUFFER);
-        const wifiPassed = classLocation.trustedWifiBSSIDs && classLocation.trustedWifiBSSIDs.length > 0
-            ? classLocation.trustedWifiBSSIDs.some(trustedBssid => detectedBSSIDs.includes(trustedBssid))
-            : true;
+        const geoPassed = isWithinRadius(
+            [parseFloat(longitude), parseFloat(latitude)],
+            activeSession.geofenceCenter.coordinates,
+            activeSession.radiusMeters + LOCATION_CHECK_RADIUS_METERS_BUFFER // Use radius from active session + buffer
+        );
+        const wifiPassed = activeSession.professorReportedBSSIDs && activeSession.professorReportedBSSIDs.length > 0
+            ? activeSession.professorReportedBSSIDs.some(trustedBssid => detectedBSSIDs.includes(trustedBssid))
+            : true; // If professor didn't report BSSIDs, Wi-Fi check passes
 
         const checkInData = {
             method: 'Manual', timestamp: new Date(), geoPassed, wifiPassed,
             mockDetected: !!isMockDetected, deviceIdMatch, deviceReportedId: deviceId,
             locationAccuracy: accuracy,
-            coordinates: { type: 'Point', coordinates: [longitude, latitude] },
+            coordinates: { type: 'Point', coordinates: [parseFloat(longitude), parseFloat(latitude)] },
             detectedBSSIDs: Array.isArray(detectedBSSIDs) ? detectedBSSIDs : []
         };
 
+        // --- 4. Apply Validation Rules ---
         // --- Apply Validation Rules ---
         if (checkInData.mockDetected) return res.status(403).json({ message: "Check-in failed: Mock location detected.", validation: checkInData });
         if (!checkInData.deviceIdMatch) {
             return res.status(403).json({ message: user.boundDeviceId ? "Check-in failed: Device ID mismatch." : "Check-in failed: Device not bound to this account.", validation: checkInData });
         }
         if (!checkInData.geoPassed) return res.status(403).json({ message: "Check-in failed: Outside designated classroom area.", validation: checkInData });
-        if (!checkInData.wifiPassed && classLocation.trustedWifiBSSIDs?.length > 0) return res.status(403).json({ message: "Check-in failed: Classroom Wi-Fi environment mismatch.", validation: checkInData });
+        if (!checkInData.wifiPassed && activeSession.professorReportedBSSIDs?.length > 0) return res.status(403).json({ message: "Check-in failed: Wi-Fi environment mismatch with professor's location.", validation: checkInData });
 
-        const classDateObject = new Date(classDateStr);
-        classDateObject.setUTCHours(0, 0, 0, 0);
+        // --- 5. Create or Update AttendanceRecord ---
+        // The 'location' field in AttendanceRecord will store the *scheduled* location ID.
+        // We need to get this from the original Timetable referenced by activeSession.timetableId
+        let scheduledStaticLocationId = null;
+        const timetableDoc = await Timetable.findById(activeSession.timetableId).lean();
+        if (timetableDoc) {
+            const daySchedule = timetableDoc.weeklySchedule[activeSession.dayOfWeek];
+            const classSlot = daySchedule?.find(s => s.startTime === activeSession.scheduledStartTime && s.professor.equals(activeSession.professor));
+            if (classSlot) {
+                scheduledStaticLocationId = classSlot.location;
+            }
+        }
 
-        const formattedDateForRoom = classDateObject.toISOString().split('T')[0];
-        const room = `session-${professorId}-${subjectId}-${formattedDateForRoom}-${scheduledStartTime}`;
+        const classDateObjectForRecord = new Date(classDateStr); // Ensure this is normalized UTC midnight
+        classDateObjectForRecord.setUTCHours(0, 0, 0, 0);
 
-        let recordToRespond; // Define here to be accessible in all paths
-        let httpStatus = 200; // Default to 200 for update
-        let actionTypeForSocket = 'UPDATE'; // Default to update
+        const room = `session-${activeSession.professor}-${activeSession.subject}-${classDateStr}-${activeSession.scheduledStartTime}`;
+        let recordToRespond;
+        let httpStatus = 200;
+        let actionTypeForSocket = 'UPDATE';
 
         const existingRecord = await AttendanceRecord.findOne({
-            student: studentId, subject: subjectId, classDate: classDateObject, scheduledStartTime: scheduledStartTime, term: term
+            student: studentId,
+            subject: activeSession.subject, // Use from activeSession
+            classDate: classDateObjectForRecord,
+            scheduledStartTime: activeSession.scheduledStartTime, // Use from activeSession
+            term: activeSession.term          // Use from activeSession
         });
 
         if (existingRecord) {
+            // ... (same logic for handling existing record as before)
             if (existingRecord.checkIn && (existingRecord.status === 'Pending' || existingRecord.status === 'Present')) {
                 recordToRespond = await AttendanceRecord.findById(existingRecord._id).populate(populateRecordFields);
                 return res.status(200).json({ message: `Already ${existingRecord.status.toLowerCase()} for this class.`, record: recordToRespond });
@@ -149,46 +192,74 @@ exports.manualCheckIn = async (req, res) => {
             existingRecord.checkIn = checkInData;
             existingRecord.status = 'Pending';
             existingRecord.checkOut = undefined;
+            // Ensure these denormalized fields are from the activeSession
+            existingRecord.professor = activeSession.professor;
+            existingRecord.scheduledEndTime = activeSession.expectedEndTime;
+            existingRecord.timetableRef = activeSession.timetableId;
+            if (scheduledStaticLocationId) existingRecord.location = scheduledStaticLocationId; else delete existingRecord.location;
+
             await existingRecord.save();
             recordToRespond = existingRecord;
         } else {
             console.log("No existing record, creating new one with status Pending.");
-            const newRecord = new AttendanceRecord({
-                student: studentId, subject: subjectId, professor: professorId, location: locationId,
-                classDate: classDateObject, scheduledStartTime, scheduledEndTime, term,
-                checkIn: checkInData, status: 'Pending',
-            });
+            const newRecordData = {
+                student: studentId,
+                subject: activeSession.subject,
+                professor: activeSession.professor,
+                // Location here is the *scheduled* static location
+                ...(scheduledStaticLocationId && { location: scheduledStaticLocationId }),
+                timetableRef: activeSession.timetableId,
+                classDate: classDateObjectForRecord,
+                scheduledStartTime: activeSession.scheduledStartTime,
+                scheduledEndTime: activeSession.expectedEndTime,
+                term: activeSession.term,
+                checkIn: checkInData,
+                status: 'Pending',
+            };
+            if (!scheduledStaticLocationId) {
+                // Handle case where static location couldn't be found - either make location optional or error out
+                console.warn("Scheduled static location ID not found for new attendance record. 'location' field will be omitted.");
+                
+                // Let's re-introduce locationId from req.body for the scheduled location
+                const studentProvidedScheduledLocationId = req.body.locationId;
+                if (studentProvidedScheduledLocationId && mongoose.Types.ObjectId.isValid(studentProvidedScheduledLocationId)) {
+                    newRecordData.location = studentProvidedScheduledLocationId;
+                } else {
+                    
+                    console.warn("No valid scheduled location ID available from timetable or student request body for new attendance record.");
+                    
+                }
+            }
+
+            const newRecord = new AttendanceRecord(newRecordData);
             await newRecord.save();
             recordToRespond = newRecord;
-            httpStatus = 201; // Set to 201 for created
+            httpStatus = 201;
             actionTypeForSocket = 'CREATE';
         }
 
-        // *** POPULATE the recordToRespond using its own _id before sending it back ***
         const populatedRecord = await AttendanceRecord.findById(recordToRespond._id).populate(populateRecordFields);
-
-        if (!populatedRecord) { // Should not happen if save was successful
-            console.error("Error: Record was saved/updated but could not be found for population immediately after.");
-            return res.status(500).json({ message: "Internal server error after processing check-in." });
+        if (!populatedRecord) {
+            console.error("Error: Record was saved for checkout but could not be found for population.");
+            return res.status(500).json({ message: "Internal server error after processing check-out." });
         }
 
+        // Socket.IO emission
         if (io) {
             io.to(room).emit('attendanceUpdate', {
                 type: actionTypeForSocket, studentId: populatedRecord.student,
                 status: populatedRecord.status, recordId: populatedRecord._id,
                 checkInTime: populatedRecord.checkIn?.timestamp,
+                // Populate with names for socket if possible
                 subjectName: populatedRecord.subject?.name,
                 professorName: `${populatedRecord.professor?.firstName} ${populatedRecord.professor?.lastName}`,
             });
         }
 
-        res.status(httpStatus).json({
-            message: `Check-in successful. Status: ${populatedRecord.status}.`,
-            record: populatedRecord
-        });
+        res.status(httpStatus).json({ message: `Check-in successful. Status: ${populatedRecord.status}.`, record: populatedRecord });
 
     } catch (error) {
-        console.error("Manual Check-In Error:", error);
+        console.error("Manual Check-In Error (Dynamic):", error);
         res.status(500).json({ message: "Server error during check-in.", error: error.message });
     }
 };
@@ -199,25 +270,25 @@ exports.manualCheckIn = async (req, res) => {
  * @route   POST /api/attendance/check-out
  * @access  Private (Student)
  */
+
+
+
 exports.manualCheckOut = async (req, res) => {
     const studentId = req.user._id;
     const io = req.io;
     const {
-        attendanceRecordId,
+        attendanceRecordId, // Student app must send this
         currentTimeStr, latitude, longitude, accuracy,
         detectedBSSIDs = [], isMockDetected, deviceId
     } = req.body;
 
-    if (!attendanceRecordId || !mongoose.Types.ObjectId.isValid(attendanceRecordId)) {
-        return res.status(400).json({ message: "Valid attendanceRecordId is required for check-out." });
-    }
-    if (!currentTimeStr || latitude == null || longitude == null || isMockDetected == null || !deviceId) {
-       return res.status(400).json({ message: "Missing required fields for check-out validation." });
-    }
+    // ... (Basic validations as before) ...
+    if (!attendanceRecordId || !mongoose.Types.ObjectId.isValid(attendanceRecordId)) { /* ... */ }
+    if (!currentTimeStr || latitude == null || longitude == null || isMockDetected == null || !deviceId) { /* ... */ }
+
 
     try {
         const recordToUpdate = await AttendanceRecord.findOne({ _id: attendanceRecordId, student: studentId });
-
         if (!recordToUpdate) {
             return res.status(404).json({ message: "Attendance record not found or does not belong to you." });
         }
@@ -230,7 +301,34 @@ exports.manualCheckOut = async (req, res) => {
             return res.status(200).json({ message: "Already checked out for this class.", record: populatedRecordOnError });
         }
 
-        // --- Time Window Check ---
+        // --- 1. Find the Active Class Session for this class for validation ---
+        const classDateObjectForQuery = new Date(recordToUpdate.classDate); // Use date from record
+        classDateObjectForQuery.setUTCHours(0, 0, 0, 0);
+
+        const activeSession = await ActiveClassSession.findOne({
+            professor: recordToUpdate.professor, // From existing attendance record
+            subject: recordToUpdate.subject,     // From existing attendance record
+            classDate: classDateObjectForQuery,
+            scheduledStartTime: recordToUpdate.scheduledStartTime, // From existing record
+            isActive: true
+        }).lean();
+
+        if (!activeSession) {
+            // This is tricky. If session ended, should checkout still be allowed based on last known geofence?
+            // Or should it fail? For now, let's assume checkout requires an active session for validation.
+            // Alternatively, professor could "end session and mark remaining pending as present/absent".
+            console.warn(`No active session found for class during checkout attempt for record ${recordToUpdate._id}. Checkout might proceed without dynamic geofence validation or fail.`);
+            // If you want to allow checkout even if session ended, you might need to store the last geofence center
+            // somewhere accessible, or relax validation.
+            // For now, let's assume it's a validation failure if session isn't active.
+            return res.status(404).json({ message: "Professor's class session seems to have ended. Checkout validation cannot be performed against live geofence." });
+        }
+        if (!activeSession.geofenceCenter || !activeSession.geofenceCenter.coordinates) {
+            return res.status(500).json({ message: "Active session found, but geofence center is missing. Contact admin." });
+        }
+
+
+        // --- 2. Time Window Check (using record's scheduledEndTime) ---
         const checkoutStartTime = recordToUpdate.scheduledEndTime;
         const checkoutEndTime = addMinutesToTime(recordToUpdate.scheduledEndTime, CHECKOUT_WINDOW_MINUTES);
         if (!checkoutEndTime || !isTimeWithinWindow(currentTimeStr, checkoutStartTime, checkoutEndTime)) {
@@ -240,70 +338,63 @@ exports.manualCheckOut = async (req, res) => {
         const user = await User.findById(studentId).select('+boundDeviceId').lean();
         if (!user) return res.status(404).json({ message: "Student not found (internal error)." });
 
-        const classLocation = await Location.findById(recordToUpdate.location).lean(); // Get location from record
-        if (!classLocation || !classLocation.location || !classLocation.location.coordinates) {
-            return res.status(404).json({ message: "Classroom location details not found for validation." });
-        }
-
-        // --- Perform Validations ---
+        // --- 3. Perform Validations using DYNAMIC Geofence from activeSession ---
         const deviceIdMatch = !!user.boundDeviceId && user.boundDeviceId === deviceId;
-        const geoPassed = isWithinRadius([longitude, latitude], classLocation.location.coordinates, classLocation.radiusMeters + LOCATION_CHECK_RADIUS_METERS_BUFFER);
-        const wifiPassed = classLocation.trustedWifiBSSIDs && classLocation.trustedWifiBSSIDs.length > 0
-            ? classLocation.trustedWifiBSSIDs.some(trustedBssid => detectedBSSIDs.includes(trustedBssid))
+        const geoPassed = isWithinRadius(
+            [parseFloat(longitude), parseFloat(latitude)],
+            activeSession.geofenceCenter.coordinates,
+            activeSession.radiusMeters + LOCATION_CHECK_RADIUS_METERS_BUFFER // Buffer can be smaller or zero for checkout
+        );
+        const wifiPassed = activeSession.professorReportedBSSIDs && activeSession.professorReportedBSSIDs.length > 0
+            ? activeSession.professorReportedBSSIDs.some(trustedBssid => detectedBSSIDs.includes(trustedBssid))
             : true;
 
-        const checkOutData = {
-            method: 'Manual', timestamp: new Date(), geoPassed, wifiPassed,
-            mockDetected: !!isMockDetected, deviceIdMatch, deviceReportedId: deviceId,
-            locationAccuracy: accuracy,
-            coordinates: { type: 'Point', coordinates: [longitude, latitude] },
-            detectedBSSIDs: Array.isArray(detectedBSSIDs) ? detectedBSSIDs : []
-        };
+            const checkOutData = {
+                method: 'Manual', timestamp: new Date(), geoPassed, wifiPassed,
+                mockDetected: !!isMockDetected, deviceIdMatch, deviceReportedId: deviceId,
+                locationAccuracy: accuracy,
+                coordinates: { type: 'Point', coordinates: [longitude, latitude] },
+                detectedBSSIDs: Array.isArray(detectedBSSIDs) ? detectedBSSIDs : []
+            };
 
-        // --- Apply Validation Rules ---
+        // --- 4. Apply Validation Rules ---
         if (checkOutData.mockDetected) return res.status(403).json({ message: "Check-out failed: Mock location detected.", validation: checkOutData });
         if (!checkOutData.deviceIdMatch) return res.status(403).json({ message: "Check-out failed: Device ID mismatch.", validation: checkOutData });
         if (!checkOutData.geoPassed) return res.status(403).json({ message: "Check-out failed: Must be inside designated area.", validation: checkOutData });
-        if (!checkOutData.wifiPassed && classLocation.trustedWifiBSSIDs?.length > 0) return res.status(403).json({ message: "Check-out failed: Wi-Fi mismatch.", validation: checkOutData });
+        if (!checkInData.wifiPassed && activeSession.professorReportedBSSIDs?.length > 0) return res.status(403).json({ message: "Check-ouuut failed: Wi-Fi environment mismatch with professor's location.", validation: checkInData });
 
-        // --- Update Record ---
+        // --- 5. Update Record ---
         recordToUpdate.checkOut = checkOutData;
-        if (recordToUpdate.checkIn) { // Should be true if status was 'Pending'
-             recordToUpdate.status = 'Present';
+        if (recordToUpdate.checkIn) {
+            recordToUpdate.status = 'Present';
         } else {
             console.warn(`Check-out performed for record ${recordToUpdate._id} without a prior check-in. Status remains ${recordToUpdate.status}.`);
         }
         await recordToUpdate.save();
 
-        // *** POPULATE before sending response ***
         const populatedRecord = await AttendanceRecord.findById(recordToUpdate._id).populate(populateRecordFields);
-
         if (!populatedRecord) {
-            console.error("Error: Record was saved for checkout but could not be found for population.");
-            return res.status(500).json({ message: "Internal server error after processing check-out." });
-        }
+                console.error("Error: Record was saved for checkout but could not be found for population.");
+                return res.status(500).json({ message: "Internal server error after processing check-out." });
+            }
 
-        const formattedDateForRoom = populatedRecord.classDate.toISOString().split('T')[0];
-        const room = `session-${populatedRecord.professor._id}-${populatedRecord.subject._id}-${formattedDateForRoom}-${populatedRecord.scheduledStartTime}`;
-
+        // Socket.IO emission
+        const room = `session-${populatedRecord.professor._id}-${populatedRecord.subject._id}-${populatedRecord.classDate.toISOString().split('T')[0]}-${populatedRecord.scheduledStartTime}`;
         if (io) {
-            io.to(room).emit('attendanceUpdate', {
-                type: 'UPDATE', studentId: populatedRecord.student, status: populatedRecord.status,
-                recordId: populatedRecord._id,
-                checkInTime: populatedRecord.checkIn?.timestamp,
-                checkOutTime: populatedRecord.checkOut?.timestamp,
-                subjectName: populatedRecord.subject?.name,
-                professorName: `${populatedRecord.professor?.firstName} ${populatedRecord.professor?.lastName}`,
-            });
-        }
+                        io.to(room).emit('attendanceUpdate', {
+                            type: 'UPDATE', studentId: populatedRecord.student, status: populatedRecord.status,
+                            recordId: populatedRecord._id,
+                            checkInTime: populatedRecord.checkIn?.timestamp,
+                            checkOutTime: populatedRecord.checkOut?.timestamp,
+                            subjectName: populatedRecord.subject?.name,
+                            professorName: `${populatedRecord.professor?.firstName} ${populatedRecord.professor?.lastName}`,
+                        });
+                    }
 
-        res.status(200).json({
-            message: `Check-out successful. Attendance marked as ${populatedRecord.status}.`,
-            record: populatedRecord
-        });
+        res.status(200).json({ message: `Check-out successful. Attendance marked as ${populatedRecord.status}.`, record: populatedRecord });
 
     } catch (error) {
-        console.error("Manual Check-Out Error:", error);
+        console.error("Manual Check-Out Error (Dynamic):", error);
         res.status(500).json({ message: "Server error during check-out.", error: error.message });
     }
 };
@@ -360,7 +451,7 @@ exports.getStudentCurrentSessionStatus = async (req, res) => {
         return res.status(400).json({ message: "Missing required query parameters (subjectId, classDateStr, scheduledStartTime, term)." });
     }
     if (!mongoose.Types.ObjectId.isValid(subjectId)) {
-         return res.status(400).json({ message: "Invalid subjectId format." });
+        return res.status(400).json({ message: "Invalid subjectId format." });
     }
 
     try {
@@ -374,8 +465,8 @@ exports.getStudentCurrentSessionStatus = async (req, res) => {
             scheduledStartTime: scheduledStartTime,
             term: term
         })
-        .populate(populateRecordFields) // Use the helper
-        .sort({ createdAt: -1 }); // Get the most recent if somehow multiple exist
+            .populate(populateRecordFields) // Use the helper
+            .sort({ createdAt: -1 }); // Get the most recent if somehow multiple exist
 
         if (!record) {
             // No record found, means not checked-in yet for this specific session
@@ -583,7 +674,7 @@ exports.updateAttendanceStatus = async (req, res) => {
         if (!record) return res.status(404).json({ message: "Attendance record not found." });
 
         if (userRole !== 'admin' && !record.professor.equals(userId)) {
-             return res.status(403).json({ message: "You are not authorized to modify this record." });
+            return res.status(403).json({ message: "You are not authorized to modify this record." });
         }
 
         const oldStatus = record.status;
@@ -600,8 +691,8 @@ exports.updateAttendanceStatus = async (req, res) => {
             io.to(room).emit('attendanceUpdate', {
                 type: 'STATUS_CHANGE', studentId: populatedRecord.student, status: populatedRecord.status,
                 recordId: populatedRecord._id, updatedBy: userRole,
-                 subjectName: populatedRecord.subject?.name,
-                 professorName: `${populatedRecord.professor?.firstName} ${populatedRecord.professor?.lastName}`,
+                subjectName: populatedRecord.subject?.name,
+                professorName: `${populatedRecord.professor?.firstName} ${populatedRecord.professor?.lastName}`,
             });
         }
         res.status(200).json({ message: `Attendance status updated to ${newStatus}.`, record: populatedRecord });

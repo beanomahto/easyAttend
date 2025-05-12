@@ -12,7 +12,7 @@ dotenv.config();
 connectDB();
 
 // --- Route Imports ---
-const authRoutes = require("./routes/authRoutes");
+// const authRoutes = require("./routes/authRoutes");
 const locationRoutes = require("./routes/locationRoutes");
 const subjectRoutes = require("./routes/subjectRoutes");
 const timetableRoutes = require("./routes/timetableRoutes");
@@ -21,6 +21,9 @@ const attendanceRoutes = require("./routes/attendanceRoutes");
 const professorRoutes = require("./routes/professorRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
 // Add other routes like attendanceRoutes later
+
+// const dashboardRoutes = require("./routes/dashboardRoutes");
+const classSessionRoutes = require('./routes/classSessionRoutes')
 
 const app = express();
 const server = http.createServer(app); // Create HTTP server
@@ -47,7 +50,7 @@ app.use((req, res, next) => {
 // --- API Routes ---
 // --- API Routes ---
 app.get("/", (req, res) => res.send("Attendance API Running...")); // Health check route
-app.use("/api/auth", authRoutes);
+// app.use("/api/auth", authRoutes);
 app.use("/api/locations", locationRoutes);
 app.use("/api/subjects", subjectRoutes);
 app.use("/api/timetables", timetableRoutes);
@@ -55,6 +58,7 @@ app.use("/api/users", userRoutes);
 app.use("/api/attendance", attendanceRoutes);
 app.use("/api/professors", professorRoutes);
 app.use("/api/dashboard", dashboardRoutes);
+app.use('/api/class-sessions', classSessionRoutes);
 // Mount other routes here...
 
 // --- Socket.IO Setup (Example - requires implementation) ---
