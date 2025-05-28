@@ -1,13 +1,10 @@
 // controllers/userController.js
 const User = require("../models/User");
 
-
 // TODO: Add controllers for getUserById, updateUser, deleteUser (Admin protected)
 
 // *** ADD this import if generateToken is in a utils file ***
 const generateToken = require("../utils/generateToken"); // Adjust path if necessary
-
-
 
 exports.getAllUsers = async (req, res) => {
   try {
@@ -16,7 +13,9 @@ exports.getAllUsers = async (req, res) => {
 
     if (role) {
       if (!["student", "professor", "admin"].includes(role)) {
-        return res.status(400).json({ message: "Invalid role specified for filtering." });
+        return res
+          .status(400)
+          .json({ message: "Invalid role specified for filtering." });
       }
       filter.role = role;
     }
@@ -25,7 +24,9 @@ exports.getAllUsers = async (req, res) => {
       if (!isNaN(semesterNumber)) {
         filter.currentSemester = semesterNumber;
       } else {
-        console.warn(`Invalid currentSemester query parameter: ${currentSemester}`);
+        console.warn(
+          `Invalid currentSemester query parameter: ${currentSemester}`
+        );
       }
     }
     if (branch) {
@@ -34,8 +35,12 @@ exports.getAllUsers = async (req, res) => {
 
     if (_distinct && filter.role === "student") {
       if (_distinct === "currentSemester") {
-        const distinctSemesters = await User.distinct("currentSemester", { role: "student" }).lean();
-        const sortedSemesters = distinctSemesters.filter((s) => s != null).sort((a, b) => a - b);
+        const distinctSemesters = await User.distinct("currentSemester", {
+          role: "student",
+        }).lean();
+        const sortedSemesters = distinctSemesters
+          .filter((s) => s != null)
+          .sort((a, b) => a - b);
         return res.status(200).json(sortedSemesters);
       }
       if (_distinct === "branch") {
@@ -46,39 +51,60 @@ exports.getAllUsers = async (req, res) => {
     }
 
     const users = await User.find(filter)
-      .select("firstName lastName email role studentId facultyId department branch currentSemester section isActive _id createdAt")
+      .select(
+        "firstName lastName email role studentId facultyId department branch currentSemester section isActive _id createdAt"
+      )
       .sort({ lastName: 1, firstName: 1 });
     res.status(200).json({ data: users });
   } catch (err) {
     console.error("Get Users Error:", err);
-    res.status(500).json({ message: "Failed to fetch users", error: err.message });
+    res
+      .status(500)
+      .json({ message: "Failed to fetch users", error: err.message });
   }
 };
 
 // ...
 
-
 // --- Helper Function for Common Registration Logic ---
 // Helper: User Registration
 // Helper: User Registration (Used by registerStudent and could be by registerProfessor)
-async function handleRegistration(req, res, userData, roleSpecificData, role, deviceId) {
+async function handleRegistration(
+  req,
+  res,
+  userData,
+  roleSpecificData,
+  role,
+  deviceId
+) {
   try {
     let existingUser = await User.findOne({ email: userData.email });
-    if (existingUser) return res.status(400).json({ message: "Email already in use." });
+    if (existingUser)
+      return res.status(400).json({ message: "Email already in use." });
 
     if (role === "student" && roleSpecificData.studentId) {
-      existingUser = await User.findOne({ studentId: roleSpecificData.studentId });
-      if (existingUser) return res.status(400).json({ message: "Student ID already exists." });
+      existingUser = await User.findOne({
+        studentId: roleSpecificData.studentId,
+      });
+      if (existingUser)
+        return res.status(400).json({ message: "Student ID already exists." });
     } else if (role === "professor" && roleSpecificData.facultyId) {
-      existingUser = await User.findOne({ facultyId: roleSpecificData.facultyId });
-      if (existingUser) return res.status(400).json({ message: "Faculty ID already exists." });
+      existingUser = await User.findOne({
+        facultyId: roleSpecificData.facultyId,
+      });
+      if (existingUser)
+        return res.status(400).json({ message: "Faculty ID already exists." });
     }
 
     if (deviceId) {
       const deviceBoundUser = await User.findOne({ boundDeviceId: deviceId });
       if (deviceBoundUser) {
-        console.warn(`Device ID ${deviceId} already bound to user ${deviceBoundUser.email}`);
-        return res.status(400).json({ message: "This device is already linked to another account." });
+        console.warn(
+          `Device ID ${deviceId} already bound to user ${deviceBoundUser.email}`
+        );
+        return res.status(400).json({
+          message: "This device is already linked to another account.",
+        });
       }
     }
 
@@ -90,6 +116,7 @@ async function handleRegistration(req, res, userData, roleSpecificData, role, de
     };
 
     const newUser = new User(newUserObject);
+
     await newUser.save();
 
     // --- WebSocket Emission AFTER saving newUser ---
@@ -117,12 +144,14 @@ async function handleRegistration(req, res, userData, roleSpecificData, role, de
     const userResponse = newUser.toObject();
     delete userResponse.password;
 
-    return res.status(201).json({ // Return the response so the caller can send it
-      message: `${role.charAt(0).toUpperCase() + role.slice(1)} registered successfully`,
+    return res.status(201).json({
+      // Return the response so the caller can send it
+      message: `${
+        role.charAt(0).toUpperCase() + role.slice(1)
+      } registered successfully`,
       token,
       user: userResponse,
     });
-
   } catch (error) {
     console.error(`${role} Registration Critical Error:`, error);
     if (error.name === "ValidationError") {
@@ -131,54 +160,95 @@ async function handleRegistration(req, res, userData, roleSpecificData, role, de
     }
     if (error.code === 11000) {
       if (error.keyPattern && error.keyPattern.boundDeviceId) {
-        return res.status(400).json({ message: "This device is already linked to another account." }); // Return
+        return res.status(400).json({
+          message: "This device is already linked to another account.",
+        }); // Return
       }
-      return res.status(400).json({ // Return
-        message: "Duplicate field value entered. Email, Student ID, or Faculty ID might already exist.",
+      return res.status(400).json({
+        // Return
+        message:
+          "Duplicate field value entered. Email, Student ID, or Faculty ID might already exist.",
       });
     }
-    return res.status(500).json({ message: `Server error during ${role} registration.` }); // Return
+    return res
+      .status(500)
+      .json({ message: `Server error during ${role} registration.` }); // Return
   }
 }
 
 const handleLogin = async (req, res, expectedRole) => {
   const { email, password, deviceId } = req.body;
   if (!email || !password) {
-    return res.status(400).json({ message: "Please provide email and password." });
+    return res
+      .status(400)
+      .json({ message: "Please provide email and password." });
   }
   try {
-    const user = await User.findOne({ email }).select("+password +boundDeviceId");
-    if (!user || !(await user.comparePassword(password)) || user.role !== expectedRole) {
-      return res.status(401).json({ message: "Invalid credentials or role mismatch." });
+    const user = await User.findOne({ email }).select(
+      "+password +boundDeviceId"
+    );
+    if (
+      !user ||
+      !(await user.comparePassword(password)) ||
+      user.role !== expectedRole
+    ) {
+      return res
+        .status(401)
+        .json({ message: "Invalid credentials or role mismatch." });
     }
     if (!user.isActive) {
-      return res.status(401).json({ message: "Account is inactive. Please contact administrator." });
+      return res.status(401).json({
+        message: "Account is inactive. Please contact administrator.",
+      });
     }
     if (user.boundDeviceId) {
       if (user.boundDeviceId !== deviceId) {
-        console.warn(`Login attempt from different device for ${user.email}. Stored: ${user.boundDeviceId}, Attempted: ${deviceId}`);
-        return res.status(403).json({ message: "Login failed: Account is bound to a different device." });
+        console.warn(
+          `Login attempt from different device for ${user.email}. Stored: ${user.boundDeviceId}, Attempted: ${deviceId}`
+        );
+        return res.status(403).json({
+          message: "Login failed: Account is bound to a different device.",
+        });
       }
       console.log(`Device ID match successful for user ${user.email}`);
     } else if (deviceId) {
       try {
-        console.log(`Binding device ${deviceId} to user ${user.email} on first login.`);
-        const deviceAlreadyBound = await User.findOne({ boundDeviceId: deviceId });
+        console.log(
+          `Binding device ${deviceId} to user ${user.email} on first login.`
+        );
+        const deviceAlreadyBound = await User.findOne({
+          boundDeviceId: deviceId,
+        });
         if (deviceAlreadyBound) {
-          console.warn(`Login failed: Device ${deviceId} is already bound to user ${deviceAlreadyBound.email}`);
-          return res.status(409).json({ message: "Login failed: This device is linked to a different account." });
+          console.warn(
+            `Login failed: Device ${deviceId} is already bound to user ${deviceAlreadyBound.email}`
+          );
+          return res.status(409).json({
+            message:
+              "Login failed: This device is linked to a different account.",
+          });
         }
         user.boundDeviceId = deviceId;
         await user.save();
       } catch (saveError) {
-        console.error(`Error saving boundDeviceId during login for user ${user.email}:`, saveError);
+        console.error(
+          `Error saving boundDeviceId during login for user ${user.email}:`,
+          saveError
+        );
         if (saveError.code === 11000) {
-          return res.status(409).json({ message: "Login failed: This device is linked to a different account." });
+          return res.status(409).json({
+            message:
+              "Login failed: This device is linked to a different account.",
+          });
         }
-        return res.status(500).json({ message: "Server error binding device during login." });
+        return res
+          .status(500)
+          .json({ message: "Server error binding device during login." });
       }
     } else {
-      console.warn(`Login occurred for user ${user.email} without device binding (no stored ID, no ID sent).`);
+      console.warn(
+        `Login occurred for user ${user.email} without device binding (no stored ID, no ID sent).`
+      );
     }
     const token = generateToken(user._id, user.role);
     const userResponse = user.toObject();
@@ -190,47 +260,108 @@ const handleLogin = async (req, res, expectedRole) => {
     });
   } catch (error) {
     console.error(`${expectedRole} Login Error:`, error);
-    res.status(500).json({ message: `Server error during ${expectedRole} login.` });
+    res
+      .status(500)
+      .json({ message: `Server error during ${expectedRole} login.` });
   }
 };
 
 // --- Student Registration ---
 exports.registerStudent = async (req, res) => {
-  const { email, password, firstName, lastName, studentId, branch, currentSemester, section, deviceId } = req.body;
+  console.log("REGISTER STUDENT REQ.BODY:", JSON.stringify(req.body, null, 2));
+  const {
+    email,
+    password,
+    firstName,
+    lastName,
+    studentId,
+    branch,
+    currentSemester,
+    section,
+    deviceId,
+  } = req.body;
+
   if (!email || !password || !firstName || !lastName) {
-    return res.status(400).json({ message: "Email, password, first name, and last name are required." });
+    return res.status(400).json({
+      message: "Email, password, first name, and last name are required.",
+    });
   }
   if (!studentId || !branch || !currentSemester || !section) {
-    return res.status(400).json({ message: "Student ID, branch, current semester, and section are required for student registration." });
+    return res.status(400).json({
+      message:
+        "Student ID, branch, current semester, and section are required for student registration.",
+    });
   }
   const coreData = { email, password, firstName, lastName };
-  const studentData = { studentId, branch: branch.toUpperCase(), currentSemester: parseInt(currentSemester, 10), section: section.toUpperCase() };
+  const studentData = {
+    studentId,
+    branch: branch.toUpperCase(),
+    currentSemester: parseInt(currentSemester, 10),
+    section: section.toUpperCase(),
+  };
   // Call the helper which will also send the response
-  await handleRegistration(req, res, coreData, studentData, "student", deviceId);
+  await handleRegistration(
+    req,
+    res,
+    coreData,
+    studentData,
+    "student",
+    deviceId
+  );
 };
 
-
-
-
-
-
-
 exports.registerProfessor = async (req, res) => {
-  const { email, password, firstName, lastName, facultyId, department, branch, deviceId } = req.body;
+  const {
+    email,
+    password,
+    firstName,
+    lastName,
+    facultyId,
+    department,
+    branch,
+    deviceId,
+  } = req.body;
   if (!email || !password || !firstName || !lastName) {
-    return res.status(400).json({ message: "Email, password, first name, and last name are required." });
+    return res.status(400).json({
+      message: "Email, password, first name, and last name are required.",
+    });
   }
   if (!facultyId || !department) {
-    return res.status(400).json({ message: "Faculty ID and department are required for professor registration." });
+    return res.status(400).json({
+      message:
+        "Faculty ID and department are required for professor registration.",
+    });
   }
-  const allowedProfessorBranches = ["ECE", "ME", "CE", "CSE", "IT", "GENERAL SCIENCE", "HUMANITIES", "OTHER"];
+  const allowedProfessorBranches = [
+    "ECE",
+    "ME",
+    "CE",
+    "CSE",
+    "IT",
+    "GENERAL SCIENCE",
+    "HUMANITIES",
+    "OTHER",
+  ];
   if (branch && !allowedProfessorBranches.includes(branch.toUpperCase())) {
-      return res.status(400).json({ message: "Invalid branch selected for professor." });
+    return res
+      .status(400)
+      .json({ message: "Invalid branch selected for professor." });
   }
   const coreData = { email, password, firstName, lastName };
-  const roleSpecificData = { facultyId, department, branch: branch ? branch.toUpperCase() : null };
+  const roleSpecificData = {
+    facultyId,
+    department,
+    branch: branch ? branch.toUpperCase() : null,
+  };
   // Call the helper which will also send the response
-  await handleRegistration(req, res, coreData, roleSpecificData, "professor", deviceId);
+  await handleRegistration(
+    req,
+    res,
+    coreData,
+    roleSpecificData,
+    "professor",
+    deviceId
+  );
 };
 
 // --- Student Login ---

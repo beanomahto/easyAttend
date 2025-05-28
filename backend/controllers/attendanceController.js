@@ -771,11 +771,9 @@ exports.manualCheckIn = async (req, res) => {
       !checkinEndTime ||
       !isTimeWithinWindow(currentTimeStr, scheduledStartTime, checkinEndTime)
     ) {
-      return res
-        .status(400)
-        .json({
-          message: `Check-in window: ${scheduledStartTime} - ${checkinEndTime}. Current: ${currentTimeStr}. Check-in closed/not open.`,
-        });
+      return res.status(400).json({
+        message: `Check-in window: ${scheduledStartTime} - ${checkinEndTime}. Current: ${currentTimeStr}. Check-in closed/not open.`,
+      });
     }
 
     const user = await User.findById(studentId).select("+boundDeviceId").lean();
@@ -788,6 +786,10 @@ exports.manualCheckIn = async (req, res) => {
       !classLocation.geofence.coordinates
     ) {
       // Check for geofence
+      console.log(classLocation);
+      //   console.log(classLocation.geofence);
+      //   console.log(classLocation.geofence.coordinates);
+
       return res
         .status(404)
         .json({ message: "Classroom geofence details not found." });
@@ -844,36 +846,28 @@ exports.manualCheckIn = async (req, res) => {
 
     // --- Apply Validation Rules ---
     if (checkInData.mockDetected)
-      return res
-        .status(403)
-        .json({
-          message: "Check-in failed: Mock location detected.",
-          validation: checkInData,
-        });
+      return res.status(403).json({
+        message: "Check-in failed: Mock location detected.",
+        validation: checkInData,
+      });
     if (!checkInData.deviceIdMatch) {
-      return res
-        .status(403)
-        .json({
-          message: user.boundDeviceId
-            ? "Check-in failed: Device ID mismatch."
-            : "Check-in failed: Device not bound to this account.",
-          validation: checkInData,
-        });
+      return res.status(403).json({
+        message: user.boundDeviceId
+          ? "Check-in failed: Device ID mismatch."
+          : "Check-in failed: Device not bound to this account.",
+        validation: checkInData,
+      });
     }
     if (!checkInData.geoPassed)
-      return res
-        .status(403)
-        .json({
-          message: "Check-in failed: Outside designated classroom area.",
-          validation: checkInData,
-        });
+      return res.status(403).json({
+        message: "Check-in failed: Outside designated classroom area.",
+        validation: checkInData,
+      });
     if (!checkInData.wifiPassed && classLocation.trustedWifiBSSIDs?.length > 0)
-      return res
-        .status(403)
-        .json({
-          message: "Check-in failed: Classroom Wi-Fi environment mismatch.",
-          validation: checkInData,
-        });
+      return res.status(403).json({
+        message: "Check-in failed: Classroom Wi-Fi environment mismatch.",
+        validation: checkInData,
+      });
 
     const classDateObject = new Date(classDateStr);
     classDateObject.setUTCHours(0, 0, 0, 0);
@@ -902,12 +896,10 @@ exports.manualCheckIn = async (req, res) => {
         recordToRespond = await AttendanceRecord.findById(
           existingRecord._id
         ).populate(populateRecordFields);
-        return res
-          .status(200)
-          .json({
-            message: `Already ${existingRecord.status.toLowerCase()} for this class.`,
-            record: recordToRespond,
-          });
+        return res.status(200).json({
+          message: `Already ${existingRecord.status.toLowerCase()} for this class.`,
+          record: recordToRespond,
+        });
       }
       existingRecord.checkIn = checkInData;
       existingRecord.status = "Pending";
@@ -1029,33 +1021,27 @@ exports.manualCheckOut = async (req, res) => {
     });
 
     if (!recordToUpdate) {
-      return res
-        .status(404)
-        .json({
-          message: "Attendance record not found or does not belong to you.",
-        });
+      return res.status(404).json({
+        message: "Attendance record not found or does not belong to you.",
+      });
     }
     if (recordToUpdate.status !== "Pending") {
       const populatedRecordOnError = await AttendanceRecord.findById(
         recordToUpdate._id
       ).populate(populateRecordFields);
-      return res
-        .status(400)
-        .json({
-          message: `Cannot check out. Current status is: ${recordToUpdate.status}.`,
-          record: populatedRecordOnError,
-        });
+      return res.status(400).json({
+        message: `Cannot check out. Current status is: ${recordToUpdate.status}.`,
+        record: populatedRecordOnError,
+      });
     }
     if (recordToUpdate.checkOut) {
       const populatedRecordOnError = await AttendanceRecord.findById(
         recordToUpdate._id
       ).populate(populateRecordFields);
-      return res
-        .status(200)
-        .json({
-          message: "Already checked out for this class.",
-          record: populatedRecordOnError,
-        });
+      return res.status(200).json({
+        message: "Already checked out for this class.",
+        record: populatedRecordOnError,
+      });
     }
 
     // --- Time Window Check ---
@@ -1068,11 +1054,9 @@ exports.manualCheckOut = async (req, res) => {
       !checkoutEndTime ||
       !isTimeWithinWindow(currentTimeStr, checkoutStartTime, checkoutEndTime)
     ) {
-      return res
-        .status(400)
-        .json({
-          message: `Check-out window: ${checkoutStartTime} - ${checkoutEndTime}. Current: ${currentTimeStr}. Check-out closed.`,
-        });
+      return res.status(400).json({
+        message: `Check-out window: ${checkoutStartTime} - ${checkoutEndTime}. Current: ${currentTimeStr}. Check-out closed.`,
+      });
     }
 
     const user = await User.findById(studentId).select("+boundDeviceId").lean();
@@ -1090,11 +1074,9 @@ exports.manualCheckOut = async (req, res) => {
       !classLocation.geofence.coordinates
     ) {
       // Check for geofence
-      return res
-        .status(404)
-        .json({
-          message: "Classroom geofence details not found for validation.",
-        });
+      return res.status(404).json({
+        message: "Classroom geofence details not found for validation.",
+      });
     }
 
     // --- Perform Validations ---
@@ -1148,33 +1130,25 @@ exports.manualCheckOut = async (req, res) => {
 
     // --- Apply Validation Rules ---
     if (checkOutData.mockDetected)
-      return res
-        .status(403)
-        .json({
-          message: "Check-out failed: Mock location detected.",
-          validation: checkOutData,
-        });
+      return res.status(403).json({
+        message: "Check-out failed: Mock location detected.",
+        validation: checkOutData,
+      });
     if (!checkOutData.deviceIdMatch)
-      return res
-        .status(403)
-        .json({
-          message: "Check-out failed: Device ID mismatch.",
-          validation: checkOutData,
-        });
+      return res.status(403).json({
+        message: "Check-out failed: Device ID mismatch.",
+        validation: checkOutData,
+      });
     if (!checkOutData.geoPassed)
-      return res
-        .status(403)
-        .json({
-          message: "Check-out failed: Must be inside designated area.",
-          validation: checkOutData,
-        });
+      return res.status(403).json({
+        message: "Check-out failed: Must be inside designated area.",
+        validation: checkOutData,
+      });
     if (!checkOutData.wifiPassed && classLocation.trustedWifiBSSIDs?.length > 0)
-      return res
-        .status(403)
-        .json({
-          message: "Check-out failed: Wi-Fi mismatch.",
-          validation: checkOutData,
-        });
+      return res.status(403).json({
+        message: "Check-out failed: Wi-Fi mismatch.",
+        validation: checkOutData,
+      });
 
     // --- Update Record ---
     recordToUpdate.checkOut = checkOutData;
@@ -1236,12 +1210,10 @@ exports.manualCheckOut = async (req, res) => {
       const messages = Object.values(error.errors).map((val) => val.message);
       return res.status(400).json({ message: messages.join(". ") });
     }
-    res
-      .status(500)
-      .json({
-        message: "Server error during check-out.",
-        error: error.message,
-      });
+    res.status(500).json({
+      message: "Server error during check-out.",
+      error: error.message,
+    });
   }
 };
 
@@ -1251,12 +1223,10 @@ exports.getStudentCurrentSessionStatus = async (req, res) => {
   const { subjectId, classDateStr, scheduledStartTime, term } = req.query;
 
   if (!subjectId || !classDateStr || !scheduledStartTime || !term) {
-    return res
-      .status(400)
-      .json({
-        message:
-          "Missing required query parameters (subjectId, classDateStr, scheduledStartTime, term).",
-      });
+    return res.status(400).json({
+      message:
+        "Missing required query parameters (subjectId, classDateStr, scheduledStartTime, term).",
+    });
   }
   if (!mongoose.Types.ObjectId.isValid(subjectId)) {
     return res.status(400).json({ message: "Invalid subjectId format." });
@@ -1282,12 +1252,10 @@ exports.getStudentCurrentSessionStatus = async (req, res) => {
     res.status(200).json(record);
   } catch (error) {
     console.error("Get Current Session Status Error:", error);
-    res
-      .status(500)
-      .json({
-        message: "Server error fetching current session status.",
-        error: error.message,
-      });
+    res.status(500).json({
+      message: "Server error fetching current session status.",
+      error: error.message,
+    });
   }
 };
 
@@ -1342,12 +1310,10 @@ exports.getStudentAttendanceHistory = async (req, res) => {
     });
   } catch (error) {
     console.error("Get Student History Error:", error);
-    res
-      .status(500)
-      .json({
-        message: "Server error fetching attendance history.",
-        error: error.message,
-      });
+    res.status(500).json({
+      message: "Server error fetching attendance history.",
+      error: error.message,
+    });
   }
 };
 
@@ -1431,12 +1397,10 @@ exports.getStudentAttendanceSummary = async (req, res) => {
     res.status(200).json(summary);
   } catch (error) {
     console.error("Get Student Summary Error:", error);
-    res
-      .status(500)
-      .json({
-        message: "Server error fetching attendance summary.",
-        error: error.message,
-      });
+    res.status(500).json({
+      message: "Server error fetching attendance summary.",
+      error: error.message,
+    });
   }
 };
 
@@ -1457,12 +1421,10 @@ exports.getProfessorSessionAttendance = async (req, res) => {
     !scheduledStartTime ||
     !term
   ) {
-    return res
-      .status(400)
-      .json({
-        message:
-          "Missing required query parameters: subjectId, locationId, classDateStr, scheduledStartTime, term.",
-      });
+    return res.status(400).json({
+      message:
+        "Missing required query parameters: subjectId, locationId, classDateStr, scheduledStartTime, term.",
+    });
   }
   if (
     !mongoose.Types.ObjectId.isValid(subjectId) ||
@@ -1495,12 +1457,10 @@ exports.getProfessorSessionAttendance = async (req, res) => {
     res.status(200).json(sessionAttendance);
   } catch (error) {
     console.error("Get Professor Session Attendance Error:", error);
-    res
-      .status(500)
-      .json({
-        message: "Server error fetching session attendance.",
-        error: error.message,
-      });
+    res.status(500).json({
+      message: "Server error fetching session attendance.",
+      error: error.message,
+    });
   }
 };
 
@@ -1521,13 +1481,9 @@ exports.updateAttendanceStatus = async (req, res) => {
   }
   const allowedStatuses = ["Present", "Absent", "Late", "Excused"];
   if (!newStatus || !allowedStatuses.includes(newStatus)) {
-    return res
-      .status(400)
-      .json({
-        message: `Invalid status. Must be one of: ${allowedStatuses.join(
-          ", "
-        )}.`,
-      });
+    return res.status(400).json({
+      message: `Invalid status. Must be one of: ${allowedStatuses.join(", ")}.`,
+    });
   }
 
   try {
@@ -1586,20 +1542,16 @@ exports.updateAttendanceStatus = async (req, res) => {
         });
       }
     }
-    res
-      .status(200)
-      .json({
-        message: `Attendance status updated to ${newStatus}.`,
-        record: populatedRecord,
-      });
+    res.status(200).json({
+      message: `Attendance status updated to ${newStatus}.`,
+      record: populatedRecord,
+    });
   } catch (error) {
     console.error("Update Attendance Status Error:", error);
-    res
-      .status(500)
-      .json({
-        message: "Server error updating attendance status.",
-        error: error.message,
-      });
+    res.status(500).json({
+      message: "Server error updating attendance status.",
+      error: error.message,
+    });
   }
 };
 
@@ -1655,25 +1607,21 @@ exports.getAdminAnalytics = async (req, res) => {
     ];
     const analytics = await AttendanceRecord.aggregate(pipeline);
 
-    res
-      .status(200)
-      .json(
-        analytics.length > 0
-          ? analytics[0]
-          : {
-              term: term,
-              presentCount: 0,
-              totalRecords: 0,
-              overallPercentage: 0,
-            }
-      );
+    res.status(200).json(
+      analytics.length > 0
+        ? analytics[0]
+        : {
+            term: term,
+            presentCount: 0,
+            totalRecords: 0,
+            overallPercentage: 0,
+          }
+    );
   } catch (error) {
     console.error("Get Admin Analytics Error:", error);
-    res
-      .status(500)
-      .json({
-        message: "Server error fetching admin analytics.",
-        error: error.message,
-      });
+    res.status(500).json({
+      message: "Server error fetching admin analytics.",
+      error: error.message,
+    });
   }
 };
